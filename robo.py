@@ -6,23 +6,28 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def enviar_relatorio():
-  relatorio = "⚽ Teste de diagnóstico do robô de apostas!"
+  # Estrutura visual robusta para o seu relatório diário
+  relatorio = """⚽ **PAINEL DIÁRIO DE APOSTAS — ANÁLISE DO DIA** ⚽
+
+🔥 **Status do Sistema:** 100% Operacional (Nuvem GitHub)
+📅 **Frequência:** Execução Automática Diária
+
+📊 **Resumo de Oportunidades:**
+• 🟢 *Jogos Analisados:* (Aguardando base de dados)
+• 🎯 *Mercados de Valor:* (Aguardando IA)
+• ⚠️ *Gestão de Banca:* Mantenha sempre a disciplina e o foco na estratégia!
+
+🤖 *Este é um relatório gerado automaticamente pelo seu robô inteligente. Em breve, traremos palpites detalhados aqui!*"""
 
   url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-  payload = {"chat_id": CHAT_ID, "text": relatorio}
+  payload = {"chat_id": CHAT_ID, "text": relatorio, "parse_mode": "Markdown"}
 
   resposta = requests.post(url, json=payload)
 
-  # Mostra a resposta exata do Telegram nos logs do GitHub
-  print("Status HTTP:", resposta.status_code)
-  print("Resposta do Telegram:", resposta.text)
-
-  dados = resposta.json()
-  if dados.get("ok"):
-    print("🚀 Mensagem enviada com sucesso de verdade!")
+  if resposta.status_code == 200:
+    print("Relatório diário robusto enviado com sucesso!")
   else:
-    print("❌ O Telegram recusou a mensagem por este motivo:")
-    print(dados.get("description"))
+    print(f"Erro ao enviar: {resposta.status_code} - {resposta.text}")
 
 
 if __name__ == "__main__":
