@@ -28,9 +28,9 @@ def executar_robo_apostas():
     """
 
   print("Gerando análise inteligente com o Gemini...")
-  # Utiliza o modelo atualizado gemini-2.0-flash
+  # Atualizado para o modelo exigido pela API atual do Google
   response = client.models.generate_content(
-      model="gemini-2.0-flash", contents=prompt_mestre
+      model="gemini-3.6-flash", contents=prompt_mestre
   )
   relatorio = response.text
 
