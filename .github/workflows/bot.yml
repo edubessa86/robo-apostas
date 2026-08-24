@@ -2,9 +2,6 @@ name: Rodar Robo de Apostas
 
 on:
   workflow_dispatch:
-  # Se quiser agendar para rodar todo dia às 8h da manhã, descomente a linha abaixo:
-  # schedule:
-  #   - cron: '0 8 * * *'
 
 jobs:
   executar-robo:
@@ -19,10 +16,10 @@ jobs:
       with:
         python-version: "3.10"
 
-    - name: Instalar dependências (Requests e Gemini)
+    - name: Instalar dependências atualizadas
       run: |
         python -m pip install --upgrade pip
-        pip install requests google-generativeai
+        pip install requests google-genai
 
     - name: Executar o Robô de Apostas
       env:
