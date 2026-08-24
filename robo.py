@@ -6,28 +6,23 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def enviar_relatorio():
-  relatorio = """⚽ PAINEL DIÁRIO DE APOSTAS — ANÁLISE DO DIA ⚽
-
-🔥 Status do Sistema: 100% Operacional (Nuvem GitHub)
-📅 Frequência: Execução Automática Diária
-
-📊 Resumo de Oportunidades:
-• Jogos Analisados: (Aguardando base de dados)
-• Mercados de Valor: (Aguardando IA)
-• Gestão de Banca: Mantenha sempre a disciplina e o foco na estratégia!
-
-🤖 Este é um relatório gerado automaticamente pelo seu robô inteligente. Em breve, traremos palpites detalhados aqui!"""
+  relatorio = "⚽ Teste de diagnóstico do robô de apostas!"
 
   url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-  # Enviando como texto simples para evitar qualquer bloqueio de formatação
   payload = {"chat_id": CHAT_ID, "text": relatorio}
 
   resposta = requests.post(url, json=payload)
 
-  if resposta.status_code == 200:
-    print("Relatório diário enviado com sucesso!")
+  # Mostra a resposta exata do Telegram nos logs do GitHub
+  print("Status HTTP:", resposta.status_code)
+  print("Resposta do Telegram:", resposta.text)
+
+  dados = resposta.json()
+  if dados.get("ok"):
+    print("🚀 Mensagem enviada com sucesso de verdade!")
   else:
-    print(f"Erro ao enviar: {resposta.status_code} - {resposta.text}")
+    print("❌ O Telegram recusou a mensagem por este motivo:")
+    print(dados.get("description"))
 
 
 if __name__ == "__main__":
