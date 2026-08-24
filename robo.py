@@ -1,5 +1,5 @@
 import os
-import google.generativeai as genai
+from google import genai
 import requests
 
 # Pega as chaves seguras do GitHub Secrets
@@ -7,12 +7,11 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Configura a IA do Google
-genai.configure(api_key=GEMINI_API_KEY)
+# Inicializa o cliente oficial moderno do Gemini
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def executar_robo_apostas():
-  # O seu prompt mestre integrado diretamente no robô
   prompt_mestre = """
     ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS
     Você é um sistema automatizado de análise profissional de apostas esportivas.
@@ -29,10 +28,11 @@ def executar_robo_apostas():
     """
 
   print("Gerando análise inteligente com o Gemini...")
-  # Utiliza o modelo rápido e eficiente para análise
-  model = genai.GenerativeModel("gemini-1.5-flash")
-  resposta_ia = model.generate_content(prompt_mestre)
-  relatorio = resposta_ia.text
+  # Utiliza o modelo atualizado gemini-2.0-flash
+  response = client.models.generate_content(
+      model="gemini-2.0-flash", contents=prompt_mestre
+  )
+  relatorio = response.text
 
   # Envia o resultado gerado pela IA para o Telegram
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
