@@ -1,18 +1,15 @@
-name: Rodar Robô de Apostas
+name: Rodar Robo de Apostas
 
 on:
   schedule:
-    # Roda todo dia às 10:00 da manhã no horário de Brasília (13:00 UTC)
     - cron: '0 13 * * *'
-  
-  # Permite que você teste o robô manualmente a hora que quiser pelo site do GitHub
   workflow_dispatch:
 
 jobs:
   executar:
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar arquivos do repositório
+      - name: Baixar arquivos do repositorio
         uses: actions/checkout@v4
 
       - name: Configurar Python
@@ -20,10 +17,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Instalar biblioteca de conexão
+      - name: Instalar biblioteca de conexao
         run: pip install requests
 
-      - name: Executar o robô
+      - name: Executar o robo
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
