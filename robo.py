@@ -2,9 +2,8 @@ import os
 import requests
 
 # Pega as chaves seguras do GitHub Secrets
-TOKEN = os.environ.get("8908004567:AAFebWxT1AkL-jTlW2_EtDl1Z06tPYBr7qg
-")
-CHAT_ID = os.environ.get("1784568398")
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def enviar_relatorio():
