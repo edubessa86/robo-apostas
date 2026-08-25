@@ -2,6 +2,8 @@ name: Rodar Robo de Apostas
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [rodar-robo]
 
 jobs:
   executar-robo:
