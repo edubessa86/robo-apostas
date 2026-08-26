@@ -2,7 +2,6 @@ from datetime import datetime
 import os
 import time
 from google import genai
-from google.genai import types
 from google.genai.errors import ClientError
 import requests
 
@@ -20,9 +19,9 @@ def executar_robo_apostas():
 
     prompt_mestre = f"""
 Você é um sistema automatizado de análise profissional de apostas esportivas e especialista em probabilidade matemática.
-Pesquise obrigatoriamente na internet os 10 principais jogos de futebol reais que acontecem HOJE ({data_hoje}).
+Com base nos principais jogos de futebol reais que acontecem HOJE ({data_hoje}).
 
-Para cada um desses 10 jogos, selecione rigorosamente 3 mercados/odds diferentes que possuam uma probabilidade estatística de acerto próxima ou superior a 80% (focado em linhas conservadoras, duplas hipóteses, gols seguros ou handicaps leves).
+Para cada um dos 10 jogos principais do dia, selecione rigorosamente 3 mercados/odds diferentes que possuam uma probabilidade estatística de acerto próxima ou superior a 80% (focado em linhas conservadoras, duplas hipóteses, gols seguros ou handicaps leves).
 
 Gere um relatório compacto, direto e focado exclusivamente para disparo no Telegram, seguindo estritamente esta estrutura:
 
@@ -42,40 +41,32 @@ JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
 Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
 https://superbet.onelink.me/Hqv6/03r54ds3
 
-Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca invente confrontos, times ou dados estatísticos.
+Atenção: Utilize apenas partidas reais da agenda de hoje. Nunca invente confrontos, times ou dados estatísticos.
 """
 
-    print(f"Buscando jogos reais na web para a data: {data_hoje}...")
+    print(f"Gerando análise analítica para a data: {data_hoje}...")
 
     max_tentativas = 3
     tentativa = 0
     relatorio = None
 
-    # Loop de tentativas automáticas caso ocorra o erro 429
+    # Loop robusto com tratamento de erros de cota e conexão
     while tentativa < max_tentativas:
         try:
             response = client.models.generate_content(
                 model="gemini-3.6-flash",
                 contents=prompt_mestre,
-                config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
             )
             relatorio = response.text
             break
-        except ClientError as e:
-            if e.code == 429:
-                tentativa += 1
-                if tentativa < max_tentativas:
-                    tempo_espera = tentativa * 20  # Espera progressiva (20s, 40s...)
-                    print(f"Limite de cota excedido (429). Tentativa {tentativa}/{max_tentativas}. Aguardando {tempo_espera}s...")
-                    time.sleep(tempo_espera)
-                else:
-                    print("Erro 429 persistente: Limite de cota esgotado na API do Google.")
-                    return
-            else:
-                print(f"Erro na API do Gemini: {e}")
-                return
+        except (ClientError, Exception) as e:
+            tentativa += 1
+            tempo_espera = tentativa * 30  # Espera progressiva maior (30s, 60s)
+            print(f"Aviso de conexão/cota: {e}. Tentativa {tentativa}/{max_tentativas}. Aguardando {tempo_espera}s...")
+            time.sleep(tempo_espera)
 
     if not relatorio:
+        print("Erro crítico: Não foi possível obter resposta da API após as tentativas.")
         return
 
     # Envia o resultado para o Telegram
@@ -94,9 +85,6 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
             f"Erro ao enviar para o Telegram: {resposta_telegram.status_code} - {resposta_telegram.text}"
         )
 
-
-if __name__ == "__main__":
-    executar_robo_apostas()
 
 if __name__ == "__main__":
     executar_robo_apostas()
