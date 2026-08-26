@@ -16,7 +16,6 @@ def executar_robo_apostas():
   # Pega a data atual do sistema de forma dinâmica (ex: 26/08/2026)
   data_hoje = datetime.now().strftime("%d/%m/%Y")
 
-  # Transformado em f-string (f""") para injetar a data de hoje na IA
   prompt_mestre = f"""
     ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS
     Você é um sistema automatizado de análise profissional de apostas esportivas.
@@ -29,7 +28,7 @@ def executar_robo_apostas():
     4. 🚨 JOGOS PARA EVITAR E MOTIVO.
     5. ⚠️ AVISO DE GESTÃO DE BANCA.
     
-    Seja direto, profissional e focado em qualidade.
+    Seja direto, profissional e focado em qualidade. Não utilize marcações complexas de markdown que possam quebrar o envio.
     """
 
   print(f"Gerando análise inteligente para a data: {data_hoje}...")
@@ -39,9 +38,12 @@ def executar_robo_apostas():
   )
   relatorio = response.text
 
-  # Envia o resultado gerado pela IA para o Telegram
+  # Envia o resultado para o Telegram sem o parse_mode (evita erros de entidades do Telegram)
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-  payload = {"chat_id": CHAT_ID, "text": relatorio, "parse_mode": "Markdown"}
+  payload = {
+      "chat_id": CHAT_ID,
+      "text": relatorio,
+  }
 
   resposta_telegram = requests.post(url, json=payload)
 
