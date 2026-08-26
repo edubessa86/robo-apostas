@@ -27,6 +27,7 @@ def executar_robo_apostas():
     3. 🔒 TOP 3 CONSERVADORAS.
     4. 🚨 JOGOS PARA EVITAR E MOTIVO.
     5. ⚠️ AVISO DE GESTÃO DE BANCA.
+    6. 🔒 indicar o link com os jogos através da casa de apostas SuperBET.
     
     Seja direto, focado em qualidade estatística e mantenha o alinhamento com a data de hoje.
     """
