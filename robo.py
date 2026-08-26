@@ -52,7 +52,7 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
         time.sleep(2)
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt_mestre,
             config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
         )
@@ -60,7 +60,7 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
 
     except ClientError as e:
         if e.code == 429:
-            print("Erro 429: Limite de cota excedido (Rate Limit). Aguarde alguns minutos antes de rodar novamente.")
+            print("Erro 429: Limite de cota excedido (Rate Limit). Aguarde alguns minutos.")
         else:
             print(f"Erro na API do Gemini: {e}")
         return
