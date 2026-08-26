@@ -29,7 +29,7 @@ def executar_robo_apostas():
     4. 🚨 JOGOS PARA EVITAR E MOTIVO.
     5. ⚠️ AVISO DE GESTÃO DE BANCA.
     
-    Logo abaixo das seções de apostas (antes do aviso final ou no rodapé), inclua obrigatoriamente e exatamente este bloco de convite promocional:
+    Logo abaixo das análises, inclua obrigatoriamente este bloco promocional:
 
     JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
     Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
