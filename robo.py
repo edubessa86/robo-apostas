@@ -47,22 +47,35 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
 
     print(f"Buscando jogos reais na web para a data: {data_hoje}...")
 
-    try:
-        # Pausa preventiva de 2 segundos para respeitar limites de taxa
-        time.sleep(2)
+    max_tentativas = 3
+    tentativa = 0
+    relatorio = None
 
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt_mestre,
-            config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
-        )
-        relatorio = response.text
+    # Loop de tentativas automáticas caso ocorra o erro 429
+    while tentativa < max_tentativas:
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=prompt_mestre,
+                config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
+            )
+            relatorio = response.text
+            break
+        except ClientError as e:
+            if e.code == 429:
+                tentativa += 1
+                if tentativa < max_tentativas:
+                    tempo_espera = tentativa * 20  # Espera progressiva (20s, 40s...)
+                    print(f"Limite de cota excedido (429). Tentativa {tentativa}/{max_tentativas}. Aguardando {tempo_espera}s...")
+                    time.sleep(tempo_espera)
+                else:
+                    print("Erro 429 persistente: Limite de cota esgotado na API do Google.")
+                    return
+            else:
+                print(f"Erro na API do Gemini: {e}")
+                return
 
-    except ClientError as e:
-        if e.code == 429:
-            print("Erro 429: Limite de cota excedido (Rate Limit). Aguarde alguns minutos.")
-        else:
-            print(f"Erro na API do Gemini: {e}")
+    if not relatorio:
         return
 
     # Envia o resultado para o Telegram
@@ -81,6 +94,9 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
             f"Erro ao enviar para o Telegram: {resposta_telegram.status_code} - {resposta_telegram.text}"
         )
 
+
+if __name__ == "__main__":
+    executar_robo_apostas()
 
 if __name__ == "__main__":
     executar_robo_apostas()
