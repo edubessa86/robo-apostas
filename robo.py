@@ -1,7 +1,9 @@
 from datetime import datetime
 import os
+import time
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 import requests
 
 # Pega as chaves seguras do GitHub Secrets
@@ -14,7 +16,6 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def executar_robo_apostas():
-    # Pega a data atual do sistema de forma dinâmica
     data_hoje = datetime.now().strftime("%d/%m/%Y")
 
     prompt_mestre = f"""
@@ -46,13 +47,23 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
 
     print(f"Buscando jogos reais na web para a data: {data_hoje}...")
 
-    # Ativa a ferramenta de busca do Google via SDK oficial com o modelo correto
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt_mestre,
-        config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
-    )
-    relatorio = response.text
+    try:
+        # Pausa preventiva de 2 segundos para respeitar limites de taxa
+        time.sleep(2)
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt_mestre,
+            config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
+        )
+        relatorio = response.text
+
+    except ClientError as e:
+        if e.code == 429:
+            print("Erro 429: Limite de cota excedido (Rate Limit). Aguarde alguns minutos antes de rodar novamente.")
+        else:
+            print(f"Erro na API do Gemini: {e}")
+        return
 
     # Envia o resultado para o Telegram
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
