@@ -46,9 +46,9 @@ Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca in
 
     print(f"Buscando jogos reais na web para a data: {data_hoje}...")
 
-    # Ativa a ferramenta de busca do Google via SDK oficial
+    # Ativa a ferramenta de busca do Google via SDK oficial com o modelo correto
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt_mestre,
         config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
     )
