@@ -18,25 +18,30 @@ def executar_robo_apostas():
   data_hoje = datetime.now().strftime("%d/%m/%Y")
 
   prompt_mestre = f"""
-    Você é um sistema automatizado de análise profissional de apostas esportivas.
-    Pesquise obrigatoriamente na internet os jogos de futebol reais que acontecem HOJE ({data_hoje}).
-    Com base estritamente nos jogos reais encontrados na web para hoje, selecione as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
-    
-    Gere um relatório compacto e objetivo para o Telegram seguindo esta estrutura resumida:
-    1. ⚽ ANÁLISE DE APOSTAS DO DIA (Data: {data_hoje} | Fuso Horário: UTC-3).
-    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogos REAIS de hoje, Mercado, Probabilidade, Odd, Valor e Risco).
-    3. 🔒 TOP 3 CONSERVADORAS.
-    4. 🚨 JOGOS PARA EVITAR E MOTIVO.
-    5. ⚠️ AVISO DE GESTÃO DE BANCA.
-    
-    Logo abaixo das análises, inclua obrigatoriamente este bloco promocional:
+ Você é um sistema automatizado de análise profissional de apostas esportivas e especialista em probabilidade matemática.
+Pesquise obrigatoriamente na internet os 10 principais jogos de futebol reais que acontecem HOJE ({data_hoje}).
 
-    JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
-    Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
-    https://superbet.onelink.me/Hqv6/03r54ds3
-    
-    Atenção: Utilize apenas partidas que realmente façam parte da agenda de jogos de hoje na internet. Nunca invente confrontos ou traga dados desatualizados.
-    """
+Para cada um desses 10 jogos, selecione rigorosamente 3 mercados/odds diferentes que possuam uma probabilidade estatística de acerto próxima ou superior a 80% (focado em linhas conservadoras, duplas hipóteses, gols seguros ou handicaps leves).
+
+Gere um relatório compacto, direto e focado exclusivamente para disparo no Telegram, seguindo estritamente esta estrutura:
+
+1. ⚽ TOP 10 JOGOS DO DIA (Data: {data_hoje} | Fuso: UTC-3)
+(Para cada um dos 10 jogos, liste de forma objetiva:)
+• Jogo [X]: [Time A] x [Time B] ([Competição])
+  - Entrada 1: [Mercado] (Odd: X.XX | Prob: ~80%)
+  - Entrada 2: [Mercado] (Odd: X.XX | Prob: ~80%)
+  - Entrada 3: [Mercado] (Odd: X.XX | Prob: ~80%)
+
+2. ⚠️ GESTÃO DE BANCA
+(Instrução rápida de 1 linha sobre controle de risco e stakes).
+
+Logo abaixo das análises, inclua obrigatoriamente este bloco promocional:
+
+JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
+Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
+https://superbet.onelink.me/Hqv6/03r54ds3
+
+Atenção: Utilize apenas partidas reais da agenda de hoje na internet. Nunca invente confrontos, times ou dados estatísticos.
 
   print(f"Buscando jogos reais na web para a data: {data_hoje}...")
 
