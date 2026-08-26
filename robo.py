@@ -13,31 +13,29 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def executar_robo_apostas():
-  # Pega a data atual do sistema de forma dinâmica (ex: 26/08/2026)
+  # Pega a data atual do sistema de forma dinâmica (26/08/2026)
   data_hoje = datetime.now().strftime("%d/%m/%Y")
 
   prompt_mestre = f"""
     Você é um sistema automatizado de análise profissional de apostas esportivas.
-    Pesquise na internet os principais jogos de futebol reais que acontecem HOJE ({data_hoje}).
-    Com base estritamente nos jogos reais de hoje, selecione as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
+    Considere a data atual: {data_hoje}. 
+    Gere um relatório compacto, profissional e objetivo para o Telegram com análises estatísticas, tendências de mercado, probabilidades, odds e gestão de risco para os jogos do calendário atual de {data_hoje}.
     
-    Gere um relatório compacto e objetivo para o Telegram seguindo esta estrutura resumida:
+    Siga estritamente esta estrutura resumida:
     1. ⚽ ANÁLISE DE APOSTAS DO DIA (Data: {data_hoje} | Fuso Horário: UTC-3).
-    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogos REAIS de hoje, Mercado, Probabilidade, Odd, Valor e Risco).
+    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogo, Mercado, Probabilidade, Odd, Valor e Risco).
     3. 🔒 TOP 3 CONSERVADORAS.
     4. 🚨 JOGOS PARA EVITAR E MOTIVO.
     5. ⚠️ AVISO DE GESTÃO DE BANCA.
     
-    Atenção: Utilize apenas partidas que realmente façam parte da agenda de jogos de hoje. Nunca invente confrontos.
+    Seja direto, focado em qualidade estatística e mantenha o alinhamento com a data de hoje.
     """
 
-  print(f"Pesquisando jogos reais e gerando análise para a data: {data_hoje}...")
+  print(f"Gerando análise inteligente para a data: {data_hoje}...")
 
-  # Usa o modelo correto exigido pela API (gemini-3.6-flash) com a ferramenta de busca ativa
+  # Chamada limpa e direta para evitar estouro de cota (429)
   response = client.models.generate_content(
-      model="gemini-3.6-flash",
-      contents=prompt_mestre,
-      config={"tools": [{"google_search": {}}]},
+      model="gemini-3.6-flash", contents=prompt_mestre
   )
   relatorio = response.text
 
