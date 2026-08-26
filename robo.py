@@ -17,28 +17,31 @@ def executar_robo_apostas():
   data_hoje = datetime.now().strftime("%d/%m/%Y")
 
   prompt_mestre = f"""
-    ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS
     Você é um sistema automatizado de análise profissional de apostas esportivas.
-    Sua função é analisar os eventos esportivos disponíveis para hoje ({data_hoje}) e entregar as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO, seguindo estritamente uma postura analítica e sem inventar dados.
+    Pesquise na internet os principais jogos de futebol reais que acontecem HOJE ({data_hoje}).
+    Com base estritamente nos jogos reais de hoje, selecione as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
     
     Gere um relatório compacto e objetivo para o Telegram seguindo esta estrutura resumida:
     1. ⚽ ANÁLISE DE APOSTAS DO DIA (Data: {data_hoje} | Fuso Horário: UTC-3).
-    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogo, Mercado, Probabilidade, Odd, Valor e Risco).
+    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogos REAIS de hoje, Mercado, Probabilidade, Odd, Valor e Risco).
     3. 🔒 TOP 3 CONSERVADORAS.
     4. 🚨 JOGOS PARA EVITAR E MOTIVO.
     5. ⚠️ AVISO DE GESTÃO DE BANCA.
     
-    Seja direto, profissional e focado em qualidade. Não utilize marcações complexas de markdown que possam quebrar o envio.
+    Atenção: Utilize apenas partidas que realmente façam parte da agenda de jogos de hoje. Nunca invente confrontos.
     """
 
-  print(f"Gerando análise inteligente para a data: {data_hoje}...")
+  print(f"Pesquisando jogos reais e gerando análise para a data: {data_hoje}...")
 
+  # Ativa a ferramenta de busca do Google (Google Search Grounding) para buscar na web
   response = client.models.generate_content(
-      model="gemini-3.6-flash", contents=prompt_mestre
+      model="gemini-2.5-flash",
+      contents=prompt_mestre,
+      config={"tools": [{"google_search": {}}]},
   )
   relatorio = response.text
 
-  # Envia o resultado para o Telegram sem o parse_mode (evita erros de entidades do Telegram)
+  # Envia o resultado para o Telegram
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
   payload = {
       "chat_id": CHAT_ID,
