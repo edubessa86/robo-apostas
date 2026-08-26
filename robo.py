@@ -33,9 +33,9 @@ def executar_robo_apostas():
 
   print(f"Pesquisando jogos reais e gerando análise para a data: {data_hoje}...")
 
-  # Ativa a ferramenta de busca do Google (Google Search Grounding) para buscar na web
+  # Usa o modelo correto exigido pela API (gemini-3.6-flash) com a ferramenta de busca ativa
   response = client.models.generate_content(
-      model="gemini-2.5-flash",
+      model="gemini-3.6-flash",
       contents=prompt_mestre,
       config={"tools": [{"google_search": {}}]},
   )
