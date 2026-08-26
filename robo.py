@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 from google import genai
+from google.genai import types
 import requests
 
 # Pega as chaves seguras do GitHub Secrets
@@ -13,30 +14,37 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def executar_robo_apostas():
-  # Pega a data atual do sistema de forma dinâmica (26/08/2026)
+  # Pega a data atual do sistema de forma dinâmica
   data_hoje = datetime.now().strftime("%d/%m/%Y")
 
   prompt_mestre = f"""
     Você é um sistema automatizado de análise profissional de apostas esportivas.
-    Considere a data atual: {data_hoje}. 
-    Gere um relatório compacto, profissional e objetivo para o Telegram com análises estatísticas, tendências de mercado, probabilidades, odds e gestão de risco para os jogos do calendário atual de {data_hoje}.
+    Pesquise obrigatoriamente na internet os jogos de futebol reais que acontecem HOJE ({data_hoje}).
+    Com base estritamente nos jogos reais encontrados na web para hoje, selecione as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
     
-    Siga estritamente esta estrutura resumida:
+    Gere um relatório compacto e objetivo para o Telegram seguindo esta estrutura resumida:
     1. ⚽ ANÁLISE DE APOSTAS DO DIA (Data: {data_hoje} | Fuso Horário: UTC-3).
-    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogo, Mercado, Probabilidade, Odd, Valor e Risco).
+    2. 🏆 TOP 5 MELHORES APOSTAS (Com Jogos REAIS de hoje, Mercado, Probabilidade, Odd, Valor e Risco).
     3. 🔒 TOP 3 CONSERVADORAS.
     4. 🚨 JOGOS PARA EVITAR E MOTIVO.
     5. ⚠️ AVISO DE GESTÃO DE BANCA.
-    6. 🔒 indicar o link com os jogos através da casa de apostas SuperBET.
     
-    Seja direto, focado em qualidade estatística e mantenha o alinhamento com a data de hoje.
+    Logo abaixo das seções de apostas (antes do aviso final ou no rodapé), inclua obrigatoriamente e exatamente este bloco de convite promocional:
+
+    JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
+    Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
+    https://superbet.onelink.me/Hqv6/03r54ds3
+    
+    Atenção: Utilize apenas partidas que realmente façam parte da agenda de jogos de hoje na internet. Nunca invente confrontos ou traga dados desatualizados.
     """
 
-  print(f"Gerando análise inteligente para a data: {data_hoje}...")
+  print(f"Buscando jogos reais na web para a data: {data_hoje}...")
 
-  # Chamada limpa e direta para evitar estouro de cota (429)
+  # Ativa a ferramenta de busca do Google via SDK oficial
   response = client.models.generate_content(
-      model="gemini-3.6-flash", contents=prompt_mestre
+      model="gemini-3.6-flash",
+      contents=prompt_mestre,
+      config=types.GenerateContentConfig(tools=[{"google_search": {}}]),
   )
   relatorio = response.text
 
