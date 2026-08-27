@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 import time
 from google import genai
-from google.genai import types  # Importante para habilitar a ferramenta de busca
+from google.genai import types
 from google.genai.errors import ClientError
 import requests
 
@@ -50,17 +50,103 @@ https://superbet.onelink.me/Hqv6/03r54ds3
     while tentativa < max_tentativas:
         try:
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.6-flash",  # <-- Modelo atualizado e recomendado pela API
                 contents=prompt_mestre,
                 config=types.GenerateContentConfig(
-                    tools=[{"google_search": {}}]  # <-- Força a IA a buscar os jogos reais na web
+                    tools=[{"google_search": {}}]  # Mantém a busca ativada para pegar os jogos reais
                 )
             )
             relatorio = response.text
             break
         except (ClientError, Exception) as e:
             tentativa += 1
-            tempo_espera = tentativa * 30  # Espera progressiva maior (30s, 60s)
+            tempo_espera = tentativa * 30  
+            print(f"Aviso de conexão/cota: {e}. Tentativa {tentativa}/{max_tentativas}. Aguardando {tempo_espera}s...")
+            time.sleep(tempo_espera)
+
+    if not relatorio:
+        print("Erro crítico: Não foi possível obter resposta da API após as tentativas.")
+        return
+
+    # Envia o resultado para o Telegram
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": relatorio,
+    }
+
+    resposta_telegram = requests.post(url, json=payload)
+    if resposta_telegram.status_code == 200:
+        print("Relatório analítico da IA enviado com sucesso para o Telegram!")
+    else:
+        print(
+            f"Erro ao enviar para o Telegram: {resposta_telegram.status_code} - {resposta_telegram.text}"
+        )
+
+if __name__ == "__main__":
+    executar_robo_apostas()from datetime import datetime
+import os
+import time
+from google import genai
+from google.genai import types
+from google.genai.errors import ClientError
+import requests
+
+# Pega as chaves seguras do GitHub Secrets
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# Inicializa o cliente oficial moderno do Gemini
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+def executar_robo_apostas():
+    data_hoje = datetime.now().strftime("%d/%m/%Y")
+    
+    prompt_mestre = f"""
+Você é um sistema automatizado de análise profissional de apostas esportivas e especialista em probabilidade matemática.
+ATENÇÃO OBRIGATÓRIA: Utilize a ferramenta de busca integrada para pesquisar na web quais são os principais jogos de futebol REAIS que acontecem HOJE ({data_hoje}). Nunca invente confrontos, times, campeonatos ou dados estatísticos.
+
+Para cada um dos 10 principais jogos reais encontrados na web para hoje, selecione rigorosamente 3 mercados/odds diferentes que possuam uma probabilidade estatística de acerto próxima ou superior a 80% (focado em linhas conservadoras, duplas hipóteses, gols seguros ou handicaps leves).
+
+Gere um relatório compacto, direto e focado exclusivamente para disparo no Telegram, seguindo estritamente esta estrutura:
+
+⚽ TOP 10 JOGOS DO DIA (Data: {data_hoje} | Fuso: UTC-3)
+(Para cada um dos 10 jogos reais, liste de forma objetiva:)
+• Jogo [X]: [Time A] x [Time B] ([Competição])
+Entrada 1: [Mercado] (Odd: X.XX | Prob: ~80%)
+Entrada 2: [Mercado] (Odd: X.XX | Prob: ~80%)
+Entrada 3: [Mercado] (Odd: X.XX | Prob: ~80%)
+
+⚠️ GESTÃO DE BANCA
+(Instrução rápida de 1 linha sobre controle de risco e stakes).
+
+Logo abaixo das análises, inclua obrigatoriamente este bloco promocional:
+JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
+Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
+https://superbet.onelink.me/Hqv6/03r54ds3
+"""
+
+    print(f"Buscando jogos reais na web e gerando análise para a data: {data_hoje}...")
+    max_tentativas = 3
+    tentativa = 0
+    relatorio = None
+
+    # Loop robusto com tratamento de erros de cota e conexão
+    while tentativa < max_tentativas:
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",  # <-- Modelo atualizado e recomendado pela API
+                contents=prompt_mestre,
+                config=types.GenerateContentConfig(
+                    tools=[{"google_search": {}}]  # Mantém a busca ativada para pegar os jogos reais
+                )
+            )
+            relatorio = response.text
+            break
+        except (ClientError, Exception) as e:
+            tentativa += 1
+            tempo_espera = tentativa * 30  
             print(f"Aviso de conexão/cota: {e}. Tentativa {tentativa}/{max_tentativas}. Aguardando {tempo_espera}s...")
             time.sleep(tempo_espera)
 
