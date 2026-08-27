@@ -56,13 +56,19 @@ def extrair_retry_after(erro: Exception) -> int | None:
     return None
 
 
-def eh_erro_de_cota_diaria(erro: Exception) -> bool:
-    """Heurística simples: mensagens de cota diária/grounding costumam mencionar
-    'PerDay' ou 'per day' no corpo do erro, diferente de cota por minuto
-    ('PerMinute'). Cota diária esgotada não se resolve com retry curto.
+def eh_erro_de_cota_diaria(erro: Exception, retry_after: int | None) -> bool:
+    """Heurística: a API normalmente só sugere um retryDelay (RetryInfo) quando
+    o limite é de curto prazo (por minuto). Quando o limite é diário/hard-cap
+    do tier gratuito — como no erro real observado, que só diz 'you exceeded
+    your current quota... check your plan and billing' sem nenhuma sugestão de
+    espera — não vem RetryInfo nenhum. Nesse caso, não vale a pena insistir.
     """
+    if retry_after is not None:
+        return False  # a API disse quanto esperar -> provavelmente é por minuto
     texto_erro = str(erro).lower()
-    return "perday" in texto_erro.replace(" ", "") or "daily" in texto_erro
+    if "resource_exhausted" in texto_erro.replace(" ", "") or "429" in texto_erro:
+        return True
+    return False
 
 
 def executar_robo_apostas():
@@ -90,7 +96,7 @@ Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta e
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP JOGOS DO DIA (A partir das 10h)</b>
 (Para os principais jogos reais encontrados para hoje, liste de forma objetiva:)
-• <b>[Time A] x [Time B]</b> ([Competição])
+- <b>[Time A] x [Time B]</b> ([Competição])
 - Entrada 1: [Mercado] (Odd: X.XX | Prob: ~80%+)
 - Entrada 2: [Mercado] (Odd: X.XX | Prob: ~80%+)
 
@@ -129,18 +135,20 @@ https://superbet.onelink.me/Hqv6/03r54ds3
             ultimo_erro = e
             tentativa += 1
 
-            # Cota diária esgotada: retry não resolve, sai do loop imediatamente
-            # em vez de queimar as 3 tentativas e vários minutos de espera à toa.
-            if eh_erro_de_cota_diaria(e):
+            # Calcula primeiro o retry sugerido pela própria API (se houver).
+            retry_sugerido = extrair_retry_after(e)
+
+            # Cota diária/hard-cap esgotada: sem RetryInfo sugerido, retry não
+            # resolve — sai do loop imediatamente em vez de queimar as 3
+            # tentativas e vários minutos de espera à toa.
+            if eh_erro_de_cota_diaria(e, retry_sugerido):
                 print(
-                    f"Cota DIÁRIA de grounding/API provavelmente esgotada: {e}. "
-                    "Retry não vai ajudar hoje — abortando tentativas."
+                    f"Cota esgotada sem sugestão de retry da API (provável limite "
+                    f"diário/tier gratuito): {e}. Abortando tentativas."
                 )
                 break
 
-            # Usa o retry-after sugerido pela própria API quando disponível;
-            # senão, cai no backoff progressivo (mais generoso que antes).
-            tempo_espera = extrair_retry_after(e) or (tentativa * 45)
+            tempo_espera = retry_sugerido or (tentativa * 45)
             print(f"Aviso de conexão/cota: {e}. Tentativa {tentativa}/{max_tentativas}. Aguardando {tempo_espera}s...")
             if tentativa < max_tentativas:
                 time.sleep(tempo_espera)
