@@ -15,12 +15,14 @@ Documentação: https://www.api-football.com/documentation-v3
 
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://v3.football.api-sports.io"
+FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
 # IDs de ligas mais comuns (ajuste conforme seu interesse).
 # Lista completa de IDs: https://www.api-football.com/documentation-v3#tag/Leagues
@@ -47,17 +49,26 @@ def buscar_jogos_do_dia(
 ) -> list[dict]:
     """Retorna jogos de hoje (pré-jogo, ainda não iniciados) a partir da hora mínima.
 
+    IMPORTANTE (bug corrigido): a API-Football, sem o parâmetro `timezone`,
+    retorna e filtra as datas em UTC. Um jogo às 21h de Brasília já é
+    00h UTC do dia seguinte, e ficava fora do filtro `date=hoje`. Além
+    disso, o horário retornado era comparado contra `hora_minima` sem
+    conversão de fuso, o que também podia excluir jogos válidos.
+    Agora a consulta já pede os dados no fuso de Brasília
+    (`timezone=America/Sao_Paulo`), então tanto o agrupamento por dia
+    quanto a hora extraída já vêm corretos.
+
     Args:
         api_key: chave da API-Football (variável de ambiente API_FOOTBALL_KEY).
-        data: data no formato "YYYY-MM-DD". Se None, usa a data atual.
-        hora_minima: só retorna jogos com horário de início >= esta hora (local).
+        data: data no formato "YYYY-MM-DD" (fuso de Brasília). Se None, usa a data atual.
+        hora_minima: só retorna jogos com horário de início >= esta hora (Brasília).
         ligas: dict {id_liga: nome} para filtrar. Se None, usa LIGAS_PADRAO.
 
     Returns:
         Lista de dicts com: liga, time_casa, time_fora, horario, fixture_id.
     """
     if data is None:
-        data = datetime.now().strftime("%Y-%m-%d")
+        data = datetime.now(FUSO_BRASILIA).strftime("%Y-%m-%d")
     if ligas is None:
         ligas = LIGAS_PADRAO
 
@@ -68,7 +79,12 @@ def buscar_jogos_do_dia(
             resp = requests.get(
                 f"{BASE_URL}/fixtures",
                 headers=_headers(api_key),
-                params={"date": data, "league": liga_id, "season": datetime.now().year},
+                params={
+                    "date": data,
+                    "league": liga_id,
+                    "season": datetime.now(FUSO_BRASILIA).year,
+                    "timezone": "America/Sao_Paulo",
+                },
                 timeout=timeout,
             )
             resp.raise_for_status()
@@ -85,7 +101,9 @@ def buscar_jogos_do_dia(
                 if status_curto != "NS":
                     continue  # ignora jogos ao vivo ou encerrados
 
-                horario_iso = fixture["date"]  # ex: "2026-08-27T13:00:00+00:00"
+                # Com timezone=America/Sao_Paulo na consulta, a API já retorna
+                # este campo com o offset correto (ex: "2026-08-27T21:00:00-03:00").
+                horario_iso = fixture["date"]
                 horario_local = datetime.fromisoformat(horario_iso)
 
                 if horario_local.hour < hora_minima:
