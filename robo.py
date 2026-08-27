@@ -6,14 +6,14 @@ from google.genai import types
 from google.genai.errors import ClientError
 import requests
 
+from api_football import buscar_jogos_do_dia, buscar_odds_do_jogo, formatar_jogos_para_prompt
+
 # Pega as chaves seguras do GitHub Secrets
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 
-# AJUSTE: se seguir tomando 429 mesmo fora do horário de pico, considere trocar
-# para um modelo com cota de grounding diferente (ex: "gemini-2.5-flash") só
-# para testar se o problema é específico do 3.6-flash na sua conta.
 MODELO = "gemini-3.6-flash"
 
 # Inicializa o cliente oficial moderno do Gemini
@@ -48,7 +48,7 @@ def extrair_retry_after(erro: Exception) -> int | None:
         detalhes = getattr(erro, "details", None) or {}
         for item in detalhes.get("error", {}).get("details", []):
             if item.get("@type", "").endswith("RetryInfo"):
-                delay = item.get("retryDelay", "")  # ex: "30s"
+                delay = item.get("retryDelay", "")
                 if delay.endswith("s"):
                     return int(float(delay[:-1]))
     except Exception:
@@ -56,57 +56,63 @@ def extrair_retry_after(erro: Exception) -> int | None:
     return None
 
 
-def eh_erro_de_cota_diaria(erro: Exception, retry_after: int | None) -> bool:
-    """Heurística: a API normalmente só sugere um retryDelay (RetryInfo) quando
-    o limite é de curto prazo (por minuto). Quando o limite é diário/hard-cap
-    do tier gratuito — como no erro real observado, que só diz 'you exceeded
-    your current quota... check your plan and billing' sem nenhuma sugestão de
-    espera — não vem RetryInfo nenhum. Nesse caso, não vale a pena insistir.
+def eh_erro_de_cota_esgotada(erro: Exception, retry_after: int | None) -> bool:
+    """Sem RetryInfo sugerido pela API, tratamos como esgotamento sério
+    (diário/hard-cap) — retry curto não ajuda nesse caso.
     """
     if retry_after is not None:
-        return False  # a API disse quanto esperar -> provavelmente é por minuto
+        return False
     texto_erro = str(erro).lower()
-    if "resource_exhausted" in texto_erro.replace(" ", "") or "429" in texto_erro:
-        return True
-    return False
+    return "resource_exhausted" in texto_erro.replace(" ", "") or "429" in texto_erro
 
 
-def executar_robo_apostas():
-    data_hoje = datetime.now().strftime("%d/%m/%Y")
+def montar_prompt(data_hoje: str, jogos_formatados: str) -> str:
+    """Monta o prompt para o Gemini.
 
-    prompt_mestre = f"""
+    IMPORTANTE: o Gemini NÃO busca mais nada na web aqui — os jogos já vêm
+    prontos da API-Football. O papel do modelo agora é só analisar/formatar,
+    o que evita consumir a cota (bem mais restrita) de grounding/Google
+    Search no tier gratuito.
+    """
+    return f"""
 ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS — DISPARO DIÁRIO
-Você é um sistema automatizado de análise profissional de apostas esportivas e especialista em probabilidade matemática. Sua função é analisar diariamente os eventos esportivos disponíveis e entregar as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
+Você é um sistema de análise de apostas esportivas e especialista em probabilidade
+matemática. Você recebe abaixo a lista REAL de jogos de hoje (já verificada por uma
+API de dados esportivos — NÃO busque nem invente outros jogos, use apenas os
+fornecidos).
 
-1. ESCOPO TEMPORAL E BUSCA
-- Data atual: {data_hoje}
-- Fuso horário: Brasília (UTC-3)
-- Horário de execução diária: A partir das 10h da manhã.
-- ATENÇÃO OBRIGATÓRIA: Utilize a ferramenta de busca integrada para pesquisar na web quais são os principais jogos de futebol REAIS que acontecem HOJE ({data_hoje}) a partir das 10h.
-- Analise estritamente partidas que ainda NÃO começaram (pré-jogo). Nunca recomende apostas em partidas ao vivo ou encerradas. NUNCA invente confrontos, times, campeonatos ou dados estatísticos.
+DATA: {data_hoje}
+FUSO: Brasília (UTC-3)
 
-2. RIGOR DE DADOS E SUPERBET
-- Utilize fontes confiáveis na web para calendário, horários, classificação e escalações prováveis.
-- Priorize cotações e mercados da **Superbet** (vitória, empate, dupla chance, gols, handicaps leves, etc.). Se a odd exata não puder ser verificada, indique claramente.
+JOGOS DE HOJE (pré-jogo, a partir das 10h):
+{jogos_formatados}
 
-3. ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
+REGRAS OBRIGATÓRIAS:
+- Use SOMENTE os jogos listados acima. NUNCA invente confrontos, times, campeonatos
+  ou dados estatísticos que não estejam aqui.
+- Quando o jogo estiver marcado como "odds não verificadas pela API", diga isso
+  claramente no relatório em vez de inventar uma odd numérica.
+- Analise estritamente partidas pré-jogo (todas as listadas já são pré-jogo).
+
+ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
 Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta estrutura:
 
 ⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP JOGOS DO DIA (A partir das 10h)</b>
-(Para os principais jogos reais encontrados para hoje, liste de forma objetiva:)
-- <b>[Time A] x [Time B]</b> ([Competição])
-- Entrada 1: [Mercado] (Odd: X.XX | Prob: ~80%+)
-- Entrada 2: [Mercado] (Odd: X.XX | Prob: ~80%+)
+(Para cada jogo da lista acima, liste de forma objetiva:)
+- <b>[Time A] x [Time B]</b> ([Competição], [Horário])
+- Análise: [contexto/observação relevante, sem inventar dados]
+- Odd: [valor verificado, ou "não verificada" se for o caso]
 
 ━━━━━━━━━━━━━━━━━━
 📊 <b>DESTAQUES E PROJEÇÕES</b>
-- Resumo analítico e estatístico dos confrontos do dia.
+- Resumo analítico dos confrontos do dia, com base apenas nos dados fornecidos.
 
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
-Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida. Aposte com responsabilidade.
+Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida.
+Aposte com responsabilidade.
 
 Logo abaixo, inclua obrigatoriamente este bloco promocional:
 JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
@@ -114,7 +120,49 @@ Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
 https://superbet.onelink.me/Hqv6/03r54ds3
 """
 
-    print(f"Buscando jogos reais na web (focado no dia {data_hoje} a partir das 10h) com o modelo {MODELO}...")
+
+def executar_robo_apostas():
+    data_hoje = datetime.now().strftime("%d/%m/%Y")
+
+    if not API_FOOTBALL_KEY:
+        print("Erro crítico: API_FOOTBALL_KEY não configurada.")
+        enviar_telegram(
+            "⚠️ <b>Robô de apostas não rodou hoje.</b>\n"
+            "Motivo: variável de ambiente API_FOOTBALL_KEY não configurada."
+        )
+        return
+
+    print(f"Buscando jogos reais via API-Football para {data_hoje} a partir das 10h...")
+    try:
+        jogos = buscar_jogos_do_dia(api_key=API_FOOTBALL_KEY, hora_minima=10)
+    except Exception as exc:
+        print(f"Erro crítico ao buscar jogos na API-Football: {exc}")
+        enviar_telegram(
+            "⚠️ <b>Robô de apostas não rodou hoje.</b>\n"
+            f"Motivo: falha ao buscar jogos na API-Football: {str(exc)[:300]}"
+        )
+        return
+
+    # Busca odds só para os jogos encontrados (evita gastar cota da API-Football à toa).
+    odds_por_fixture = {}
+    for jogo in jogos:
+        odds = buscar_odds_do_jogo(api_key=API_FOOTBALL_KEY, fixture_id=jogo["fixture_id"])
+        if odds:
+            odds_por_fixture[jogo["fixture_id"]] = odds
+
+    jogos_formatados = formatar_jogos_para_prompt(jogos, odds_por_fixture)
+
+    if not jogos:
+        print("Nenhum jogo encontrado para hoje — encerrando sem chamar o Gemini.")
+        enviar_telegram(
+            f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>\n\n"
+            "Nenhum jogo pré-jogo encontrado nas ligas monitoradas a partir das 10h de hoje."
+        )
+        return
+
+    prompt_mestre = montar_prompt(data_hoje, jogos_formatados)
+
+    print(f"Enviando {len(jogos)} jogos para análise do modelo {MODELO} (sem grounding)...")
     max_tentativas = 3
     tentativa = 0
     relatorio = None
@@ -122,30 +170,22 @@ https://superbet.onelink.me/Hqv6/03r54ds3
 
     while tentativa < max_tentativas:
         try:
+            # NOTE: sem `tools=[{"google_search": {}}]` — o Gemini não busca mais
+            # nada na web, só analisa os dados já fornecidos. Isso usa a cota
+            # normal de geração de texto, bem mais generosa que a de grounding.
             response = client.models.generate_content(
                 model=MODELO,
                 contents=prompt_mestre,
-                config=types.GenerateContentConfig(
-                    tools=[{"google_search": {}}]
-                )
             )
             relatorio = response.text
             break
         except (ClientError, Exception) as e:
             ultimo_erro = e
             tentativa += 1
-
-            # Calcula primeiro o retry sugerido pela própria API (se houver).
             retry_sugerido = extrair_retry_after(e)
 
-            # Cota diária/hard-cap esgotada: sem RetryInfo sugerido, retry não
-            # resolve — sai do loop imediatamente em vez de queimar as 3
-            # tentativas e vários minutos de espera à toa.
-            if eh_erro_de_cota_diaria(e, retry_sugerido):
-                print(
-                    f"Cota esgotada sem sugestão de retry da API (provável limite "
-                    f"diário/tier gratuito): {e}. Abortando tentativas."
-                )
+            if eh_erro_de_cota_esgotada(e, retry_sugerido):
+                print(f"Cota esgotada sem sugestão de retry da API: {e}. Abortando tentativas.")
                 break
 
             tempo_espera = retry_sugerido or (tentativa * 45)
@@ -154,16 +194,11 @@ https://superbet.onelink.me/Hqv6/03r54ds3
                 time.sleep(tempo_espera)
 
     if not relatorio:
-        print("Erro crítico: Não foi possível obter resposta da API após as tentativas.")
-        # Antes o script simplesmente parava aqui sem avisar ninguém.
-        # Agora manda um aviso curto pro Telegram para você saber que o robô
-        # não rodou hoje, em vez de descobrir só olhando o log do GitHub Actions.
+        print("Erro crítico: Não foi possível obter resposta da API do Gemini.")
         enviar_telegram(
             "⚠️ <b>Robô de apostas não conseguiu gerar o relatório hoje.</b>\n"
             f"Motivo: {str(ultimo_erro)[:300]}\n"
-            "Provável causa: cota gratuita da API do Gemini esgotada "
-            "(especialmente a cota de busca/grounding, que é bem menor que a "
-            "cota normal de tokens no tier free)."
+            f"(Jogos encontrados pela API-Football: {len(jogos)} — o problema foi na etapa de análise do Gemini.)"
         )
         return
 
