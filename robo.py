@@ -22,30 +22,22 @@ def executar_robo_apostas():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     
     prompt_mestre = f"""
-ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS
-Você é um sistema automatizado de análise profissional de apostas esportivas e especialista em probabilidade matemática. Sua função é analisar diariamente os eventos esportivos disponíveis para apostas e entregar ao usuário as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
+ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS — DISPARO DIÁRIO
+Você é um sistema automatizado de análise profissional de apostas esportivas e especialista em probabilidade matemática. Sua função é analisar diariamente os eventos esportivos disponíveis e entregar as melhores oportunidades de acordo com PROBABILIDADE, ODDS, VALOR ESPERADO E RISCO.
 
-1. DATA, HORÁRIO E ESCOPO TEMPORAL
+1. ESCOPO TEMPORAL E BUSCA
 - Data atual: {data_hoje}
 - Fuso horário: Brasília (UTC-3)
-- Horário de execução diária: 10:00 da manhã.
-- ATENÇÃO OBRIGATÓRIA: Utilize a ferramenta de busca integrada para pesquisar na web quais são os principais jogos de futebol REAIS que acontecem HOJE ({data_hoje}) a partir das 10h.
-- Analise estritamente partidas que ainda NÃO começaram (pré-jogo). Nunca classifique ou recomende apostas em partidas ao vivo ou já encerradas. NUNCA invente confrontos, times, campeonatos ou dados estatísticos.
+- Horário de execução diária: A partir das 10h da manhã.
+- ATENÇÃO OBRIGATÓRIA: Utilize a ferramenta de busca integrada para pesquisar na web quais são os principais jogos de futebol REAIS que acontecem HOJE ({data_hoje}) a partir das 10h. 
+- Analise estritamente partidas que ainda NÃO começaram (pré-jogo). Nunca recomende apostas em partidas ao vivo ou encerradas. NUNCA invente confrontos, times, campeonatos ou dados estatísticos.
 
-2. PESQUISA E RIGOR DE DADOS
-- Utilize fontes confiáveis na web para: calendário, horários, classificação, escalações prováveis, desfalques, suspensões e estatísticas recentes.
-- REGRA ABSOLUTA: Nenhuma informação pode ser inventada. Se determinada informação não puder ser confirmada, escreva obrigatoriamente: "Informação não verificada."
+2. RIGOR DE DADOS E SUPERBET
+- Utilize fontes confiáveis na web para calendário, horários, classificação e escalações prováveis.
+- Priorize cotações e mercados da **Superbet** (vitória, empate, dupla chance, gols, handicaps leves, etc.). Se a odd exata não puder ser verificada, indique claramente.
 
-3. CASA DE APOSTAS (SUPERBET)
-- Priorize cotações e mercados da **Superbet**: vitória, empate, dupla chance, empate anula, handicap, gols, ambas marcam, escanteios, cartões, finalizações e Criar Aposta/Bet Builder.
-- NUNCA invente uma odd. Se a odd não estiver disponível ou não puder ser verificada, escreva: "Odd não verificada." Não apresente cotações estimadas como se fossem reais.
-
-4. SELEÇÃO DOS JOGOS E MERCADOS
-- Priorize competições de relevância (Brasileirão Série A, B, C, Libertadores, Sul-Americana, Premier League, La Liga, Champions League, etc.).
-- Selecione rigorosamente linhas conservadoras, duplas hipóteses, gols seguros ou handicaps leves que possuam alta probabilidade estatística de acerto.
-
-5. ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM
-Gere o relatório utilizando tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta estrutura:
+3. ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
+Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta estrutura:
 
 ⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
 ━━━━━━━━━━━━━━━━━━
@@ -57,7 +49,7 @@ Gere o relatório utilizando tags HTML limpas do Telegram (`<b>`, `<i>`) seguind
 
 ━━━━━━━━━━━━━━━━━━
 📊 <b>DESTAQUES E PROJEÇÕES</b>
-- Breve resumo das análises estatísticas, xG, média de gols e contexto dos principais confrontos do dia.
+- Resumo analítico e estatístico dos confrontos do dia.
 
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
@@ -69,16 +61,16 @@ Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
 https://superbet.onelink.me/Hqv6/03r54ds3
 """
 
-    print(f"Buscando jogos reais na web (focado no dia {data_hoje} a partir das 10h) e gerando análise...")
+    print(f"Buscando jogos reais na web (focado no dia {data_hoje} a partir das 10h) com o modelo gemini-3.6-flash...")
     max_tentativas = 3
     tentativa = 0
     relatorio = None
 
-    # Loop robusto com tratamento de erros de cota (429) e conexão
+    # Loop robusto com tratamento de erros e ativação correta da ferramenta de busca
     while tentativa < max_tentativas:
         try:
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.6-flash",
                 contents=prompt_mestre,
                 config=types.GenerateContentConfig(
                     tools=[{"google_search": {}}]
@@ -108,7 +100,7 @@ https://superbet.onelink.me/Hqv6/03r54ds3
         }
         resposta_telegram = requests.post(url, json=payload)
         if resposta_telegram.status_code == 200:
-            print("Relatório analítico da IA enviado com sucesso para o Telegram!")
+            print("Relatório analítico enviado com sucesso para o Telegram!")
         else:
             print(f"Erro ao enviar para o Telegram: {resposta_telegram.status_code} - {resposta_telegram.text}")
 
