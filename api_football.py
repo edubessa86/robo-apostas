@@ -40,6 +40,49 @@ def _headers(api_key: str) -> dict:
     return {"x-apisports-key": api_key}
 
 
+def buscar_id_liga_por_nome(api_key: str, nome_busca: str, timeout: int = 15) -> list[dict]:
+    """Busca ligas/competições pelo nome usando o endpoint oficial /leagues.
+
+    Use isso para descobrir o ID correto de uma competição (ex: "Copa do
+    Brasil", "Serie B", "Libertadores") em vez de adivinhar o número — os
+    IDs variam entre provedores de API de futebol e usar um ID errado faz
+    o robô simplesmente não encontrar nenhum jogo, sem erro nenhum.
+
+    Retorna uma lista de dicts com id, nome, país e temporadas disponíveis,
+    para você conferir e copiar o ID certo para LIGAS_PADRAO.
+
+    Exemplo de uso local (não roda no GitHub Actions, é só para consulta):
+        from api_football import buscar_id_liga_por_nome
+        resultados = buscar_id_liga_por_nome("SUA_CHAVE", "Copa do Brasil")
+        for r in resultados:
+            print(r)
+    """
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/leagues",
+            headers=_headers(api_key),
+            params={"search": nome_busca},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.RequestException as exc:
+        logger.error("Erro ao buscar ID da liga '%s': %s", nome_busca, exc)
+        return []
+
+    resultados = []
+    for item in payload.get("response", []):
+        liga = item.get("league", {})
+        pais = item.get("country", {})
+        resultados.append({
+            "id": liga.get("id"),
+            "nome": liga.get("name"),
+            "tipo": liga.get("type"),  # "League" ou "Cup"
+            "pais": pais.get("name"),
+        })
+    return resultados
+
+
 def buscar_jogos_do_dia(
     api_key: str,
     data: str | None = None,
@@ -53,121 +96,4 @@ def buscar_jogos_do_dia(
     retorna e filtra as datas em UTC. Um jogo às 21h de Brasília já é
     00h UTC do dia seguinte, e ficava fora do filtro `date=hoje`. Além
     disso, o horário retornado era comparado contra `hora_minima` sem
-    conversão de fuso, o que também podia excluir jogos válidos.
-    Agora a consulta já pede os dados no fuso de Brasília
-    (`timezone=America/Sao_Paulo`), então tanto o agrupamento por dia
-    quanto a hora extraída já vêm corretos.
-
-    Args:
-        api_key: chave da API-Football (variável de ambiente API_FOOTBALL_KEY).
-        data: data no formato "YYYY-MM-DD" (fuso de Brasília). Se None, usa a data atual.
-        hora_minima: só retorna jogos com horário de início >= esta hora (Brasília).
-        ligas: dict {id_liga: nome} para filtrar. Se None, usa LIGAS_PADRAO.
-
-    Returns:
-        Lista de dicts com: liga, time_casa, time_fora, horario, fixture_id.
-    """
-    if data is None:
-        data = datetime.now(FUSO_BRASILIA).strftime("%Y-%m-%d")
-    if ligas is None:
-        ligas = LIGAS_PADRAO
-
-    jogos: list[dict] = []
-
-    for liga_id, liga_nome in ligas.items():
-        try:
-            resp = requests.get(
-                f"{BASE_URL}/fixtures",
-                headers=_headers(api_key),
-                params={
-                    "date": data,
-                    "league": liga_id,
-                    "season": datetime.now(FUSO_BRASILIA).year,
-                    "timezone": "America/Sao_Paulo",
-                },
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        except requests.RequestException as exc:
-            logger.error("Erro ao buscar fixtures da liga %s (%s): %s", liga_nome, liga_id, exc)
-            continue
-
-        for item in payload.get("response", []):
-            try:
-                fixture = item["fixture"]
-                status_curto = fixture["status"]["short"]  # "NS" = Not Started (pré-jogo)
-
-                if status_curto != "NS":
-                    continue  # ignora jogos ao vivo ou encerrados
-
-                # Com timezone=America/Sao_Paulo na consulta, a API já retorna
-                # este campo com o offset correto (ex: "2026-08-27T21:00:00-03:00").
-                horario_iso = fixture["date"]
-                horario_local = datetime.fromisoformat(horario_iso)
-
-                if horario_local.hour < hora_minima:
-                    continue
-
-                jogos.append({
-                    "fixture_id": fixture["id"],
-                    "liga": liga_nome,
-                    "time_casa": item["teams"]["home"]["name"],
-                    "time_fora": item["teams"]["away"]["name"],
-                    "horario": horario_local.strftime("%H:%M"),
-                })
-            except (KeyError, ValueError) as exc:
-                logger.warning("Item de fixture ignorado por formato inesperado: %s", exc)
-                continue
-
-    logger.info("Encontrados %d jogos pré-jogo a partir das %dh.", len(jogos), hora_minima)
-    return jogos
-
-
-def buscar_odds_do_jogo(api_key: str, fixture_id: int, timeout: int = 15) -> list[dict]:
-    """Busca odds disponíveis para um jogo específico.
-
-    ATENÇÃO: o endpoint /odds pode ter cobertura limitada de ligas/casas no
-    tier gratuito da API-Football. Se vier vazio, o prompt já orienta o
-    Gemini a indicar claramente que a odd não pôde ser verificada, em vez de
-    inventar um valor.
-    """
-    try:
-        resp = requests.get(
-            f"{BASE_URL}/odds",
-            headers=_headers(api_key),
-            params={"fixture": fixture_id},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    except requests.RequestException as exc:
-        logger.error("Erro ao buscar odds do fixture %s: %s", fixture_id, exc)
-        return []
-
-    return payload.get("response", [])
-
-
-def formatar_jogos_para_prompt(jogos: list[dict], odds_por_fixture: dict[int, list[dict]] | None = None) -> str:
-    """Formata a lista de jogos (e odds, se houver) em texto simples para
-    incluir no prompt do Gemini. Isso substitui a busca via `google_search`.
-    """
-    if not jogos:
-        return "Nenhum jogo pré-jogo encontrado para hoje a partir do horário configurado."
-
-    odds_por_fixture = odds_por_fixture or {}
-    linhas = []
-
-    for jogo in jogos:
-        linha = (
-            f"- {jogo['time_casa']} x {jogo['time_fora']} "
-            f"({jogo['liga']}, às {jogo['horario']})"
-        )
-        odds_jogo = odds_por_fixture.get(jogo["fixture_id"])
-        if odds_jogo:
-            linha += " — odds disponíveis na API (ver dados brutos anexos)"
-        else:
-            linha += " — odds não verificadas pela API; NÃO invente valores"
-        linhas.append(linha)
-
-    return "\n".join(linhas)
+    conversão de fuso, o que também podia
