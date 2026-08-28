@@ -19,8 +19,18 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 
-# Edite esta lista com os nomes das competições que você quer descobrir.
-NOMES_PARA_BUSCAR = ["Copa do Brasil", "Serie B", "Libertadores", "Sudamericana"]
+# Já confirmados anteriormente (Copa do Brasil=73, Libertadores=13,
+# Sudamericana=11, Serie B Brasil=72) — não precisam ser buscados de novo.
+# Esta lista cobre o que ainda falta confirmar em LIGAS_PADRAO:
+NOMES_PARA_BUSCAR = [
+    "Serie A",          # cuidado: existe Itália E Brasil, confira o campo "pais"
+    "Premier League",
+    "La Liga",
+    "Bundesliga",
+    "Ligue 1",
+    "Champions League",
+    "Europa League",
+]
 
 
 def enviar_telegram(texto: str) -> None:
