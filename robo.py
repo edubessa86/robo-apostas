@@ -90,8 +90,12 @@ JOGOS DE HOJE (pré-jogo, a partir das 10h):
 REGRAS OBRIGATÓRIAS:
 - Use SOMENTE os jogos listados acima. NUNCA invente confrontos, times, campeonatos
   ou dados estatísticos que não estejam aqui.
-- Quando o jogo estiver marcado como "odds não verificadas pela API", diga isso
-  claramente no relatório em vez de inventar uma odd numérica.
+- Quando a linha do jogo trouxer "Odds reais verificadas", use EXATAMENTE o mercado,
+  a seleção e a odd indicados — não arredonde, não troque o mercado e não calcule
+  uma probabilidade diferente da que já está escrita.
+- Quando o jogo estiver marcado como "nenhum mercado atingiu o mínimo de confiança"
+  ou "odds não verificadas pela API", diga isso claramente no relatório e NÃO
+  sugira entrada de aposta para esse jogo — nunca invente uma odd numérica.
 - Analise estritamente partidas pré-jogo (todas as listadas já são pré-jogo).
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
@@ -103,7 +107,7 @@ Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta e
 (Para cada jogo da lista acima, liste de forma objetiva:)
 - <b>[Time A] x [Time B]</b> ([Competição], [Horário])
 - Análise: [contexto/observação relevante, sem inventar dados]
-- Odd: [valor verificado, ou "não verificada" se for o caso]
+- Odd: [valor verificado, ou "sem entrada recomendada" se for o caso]
 
 ━━━━━━━━━━━━━━━━━━
 📊 <b>DESTAQUES E PROJEÇÕES</b>
