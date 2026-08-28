@@ -11,14 +11,26 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://v3.football.api-sports.io"
 FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
+# Todos os ids abaixo foram confirmados via /leagues?search= na própria
+# API-Football (checando o campo "pais" de cada resultado).
 LIGAS_PADRAO = {
-    71: "Brasileirão Série A",
-    39: "Premier League",
-    140: "La Liga",
-    2: "Champions League",
-    135: "Serie A (Itália)",
-    61: "Ligue 1",
+    71: "Brasileirão Série A",       # Brazil
+    72: "Serie B (Brasil)",          # Brazil - remova se não quiser cobrir a Série B
+    73: "Copa do Brasil",            # Brazil
+    13: "CONMEBOL Libertadores",     # World
+    11: "CONMEBOL Sudamericana",     # World
+    39: "Premier League",            # England
+    140: "La Liga",                  # Spain
+    135: "Serie A (Itália)",         # Italy
+    78: "Bundesliga",                # Germany
+    61: "Ligue 1",                   # France
+    2: "Champions League",           # World (UEFA)
+    3: "Europa League",              # World (UEFA)
 }
+
+# Mercados considerados conservadores o suficiente para o robô sugerir.
+MERCADOS_CONSERVADORES = {"Double Chance", "Goals Over/Under"}
+PROBABILIDADE_MINIMA = 0.70  # implícita a partir da odd real (1/odd)
 
 
 def _headers(api_key):
@@ -125,7 +137,57 @@ def buscar_odds_do_jogo(api_key, fixture_id, timeout=15):
     return payload.get("response", [])
 
 
+def extrair_mercados_seguros(odds_response, mercados_aceitos=None, prob_minima=PROBABILIDADE_MINIMA):
+    """Extrai até 3 mercados conservadores da resposta bruta de /odds, com
+    probabilidade implícita (1/odd) igual ou acima do mínimo definido.
+
+    Todos os valores retornados (odd, seleção, mercado) vêm diretamente da
+    API — nada aqui é estimado ou inventado.
+    """
+    if mercados_aceitos is None:
+        mercados_aceitos = MERCADOS_CONSERVADORES
+    if not odds_response:
+        return []
+
+    bookmakers = odds_response[0].get("bookmakers", [])
+    if not bookmakers:
+        return []
+
+    # Usa a primeira casa de apostas disponível. Se quiser padronizar por uma
+    # casa específica (ex: Bet365), filtre bookmakers por "name" aqui.
+    bets = bookmakers[0].get("bets", [])
+    entradas = []
+    for bet in bets:
+        if bet.get("name") not in mercados_aceitos:
+            continue
+        for valor in bet.get("values", []):
+            try:
+                odd = float(valor["odd"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if odd <= 0:
+                continue
+            prob_implicita = 1 / odd
+            if prob_implicita >= prob_minima:
+                entradas.append({
+                    "mercado": bet["name"],
+                    "selecao": valor["value"],
+                    "odd": odd,
+                    "prob_implicita": prob_implicita,
+                })
+
+    entradas.sort(key=lambda e: e["prob_implicita"], reverse=True)
+    return entradas[:3]
+
+
 def formatar_jogos_para_prompt(jogos, odds_por_fixture=None):
+    """Monta o texto de jogos+odds que vai para o prompt do Gemini.
+
+    IMPORTANTE (correção de bug): antes, quando havia odds disponíveis, o
+    texto só dizia "ver dados brutos anexos" sem anexar nada de fato — o
+    modelo nunca recebia os números reais. Agora os valores de odd e
+    probabilidade implícita são escritos diretamente na linha do jogo.
+    """
     if not jogos:
         return "Nenhum jogo pré-jogo encontrado para hoje a partir do horário configurado."
 
@@ -135,10 +197,21 @@ def formatar_jogos_para_prompt(jogos, odds_por_fixture=None):
     for jogo in jogos:
         linha = "- " + jogo["time_casa"] + " x " + jogo["time_fora"] + " (" + jogo["liga"] + ", às " + jogo["horario"] + ")"
         odds_jogo = odds_por_fixture.get(jogo["fixture_id"])
-        if odds_jogo:
-            linha += " — odds disponíveis na API (ver dados brutos anexos)"
+        entradas = extrair_mercados_seguros(odds_jogo) if odds_jogo else []
+
+        if entradas:
+            linha += "\n  Odds reais verificadas (NÃO altere estes números, apenas comente):"
+            for entrada in entradas:
+                linha += (
+                    "\n    * " + entrada["mercado"] + " - " + entrada["selecao"]
+                    + ": odd " + f"{entrada['odd']:.2f}"
+                    + " (prob. implícita ~" + f"{entrada['prob_implicita'] * 100:.0f}%" + ")"
+                )
+        elif odds_jogo:
+            linha += "\n  Odds verificadas pela API, mas nenhum mercado atingiu o mínimo de confiança; NÃO invente valores"
         else:
-            linha += " — odds não verificadas pela API; NÃO invente valores"
+            linha += "\n  Odds não verificadas pela API; NÃO invente valores"
+
         linhas.append(linha)
 
     return "\n".join(linhas)
