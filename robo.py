@@ -11,7 +11,8 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-MODELO = "gemini-3.6-flash"
+MODELO = "gemini-2.5-flash"  # gemini-3.6-flash não tem grounding grátis via API (só no AI Studio);
+                              # gemini-2.5-flash tem até 500 buscas grátis/dia, suficiente para 1 run diário.
 
 # Inicializa o cliente oficial moderno do Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
