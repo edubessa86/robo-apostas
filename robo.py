@@ -6,13 +6,10 @@ from google.genai import types
 from google.genai.errors import ClientError
 import requests
 
-from api_football import buscar_jogos_do_dia, buscar_odds_do_jogo, formatar_jogos_para_prompt
-
 # Pega as chaves seguras do GitHub Secrets
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 
 MODELO = "gemini-3.6-flash"
 
@@ -66,57 +63,70 @@ def eh_erro_de_cota_esgotada(erro: Exception, retry_after: int | None) -> bool:
     return "resource_exhausted" in texto_erro.replace(" ", "") or "429" in texto_erro
 
 
-def montar_prompt(data_hoje: str, jogos_formatados: str) -> str:
+def montar_prompt(data_hoje: str) -> str:
     """Monta o prompt para o Gemini.
 
-    IMPORTANTE: o Gemini NÃO busca mais nada na web aqui — os jogos já vêm
-    prontos da API-Football. O papel do modelo agora é só analisar/formatar,
-    o que evita consumir a cota (bem mais restrita) de grounding/Google
-    Search no tier gratuito.
+    Esta versão usa grounding com Google Search (ver `config` em
+    `executar_robo_apostas`) porque agora cobrimos qualquer esporte, não só
+    futebol — a API-Football sozinha não dá conta disso.
+
+    IMPORTANTE: como não há mais uma lista de jogos pré-verificada vindo de
+    uma API, a única defesa contra hallucination aqui são estas regras de
+    citação obrigatória. Sem uma fonte real por trás de cada número, o
+    modelo tende a inventar "confiança" e placares — por isso isso é
+    proibido explicitamente abaixo.
     """
     return f"""
-ROBÔ DE ANÁLISE DE APOSTAS ESPORTIVAS — DISPARO DIÁRIO
-Você é um sistema de análise de apostas esportivas e especialista em probabilidade
-matemática. Você recebe abaixo a lista REAL de jogos de hoje (já verificada por uma
-API de dados esportivos — NÃO busque nem invente outros jogos, use apenas os
-fornecidos).
+Você é um sistema automatizado de análise esportiva para apostas.
 
-DATA: {data_hoje}
-FUSO: Brasília (UTC-3)
+Pesquise na internet (em todos os lugares: sites de estatística esportiva,
+casas de apostas, portais de notícias esportivas) e traga todas as apostas
+esportivas de qualquer esporte de hoje ({data_hoje}, fuso de Brasília, UTC-3)
+a partir das 10h. Para cada evento encontrado, traga:
+- Os confrontos do dia
+- Prováveis vencedores
+- Odds confiáveis para apostar
+- Caso seja futebol: prováveis quantidade de escanteios, gols, cartões,
+  finalizações e chutes ao gol
 
-JOGOS DE HOJE (pré-jogo, a partir das 10h):
-{jogos_formatados}
-
-REGRAS OBRIGATÓRIAS:
-- Use SOMENTE os jogos listados acima. NUNCA invente confrontos, times, campeonatos
-  ou dados estatísticos que não estejam aqui.
-- Quando a linha do jogo trouxer "Odds reais verificadas", use EXATAMENTE o mercado,
-  a seleção e a odd indicados — não arredonde, não troque o mercado e não calcule
-  uma probabilidade diferente da que já está escrita.
-- Quando o jogo estiver marcado como "nenhum mercado atingiu o mínimo de confiança"
-  ou "odds não verificadas pela API", diga isso claramente no relatório e NÃO
-  sugira entrada de aposta para esse jogo — nunca invente uma odd numérica.
-- Analise estritamente partidas pré-jogo (todas as listadas já são pré-jogo).
+REGRAS OBRIGATÓRIAS (siga rigorosamente):
+- Toda odd, probabilidade, placar provável ou estatística (escanteios, gols,
+  cartões, finalizações, chutes ao gol) que você citar TEM que vir de uma
+  fonte real que você encontrou na busca. Cite o nome do site entre
+  parênteses ao lado da informação, como "(SportyTrader)" ou "(Forebet)".
+- PROIBIDO inventar uma nota de "confiança" própria (ex: 8/10, 9.5/10) que
+  não tenha sido dita por nenhuma fonte. Se quiser comunicar confiança, use
+  apenas o que a própria fonte afirmou (ex: "Forebet aponta 60% de chance de
+  vitória"), nunca um número inventado por você.
+- PROIBIDO inventar um placar provável que não tenha sido citado por
+  nenhuma fonte encontrada na busca.
+- Se não encontrar dados suficientemente confiáveis e citáveis para um
+  evento, não o inclua no relatório — não complete com estimativas soltas.
+- NUNCA invente confrontos, jogos, times ou competições que não apareceram
+  nas buscas.
+- Não copie frases inteiras das fontes; resuma com suas próprias palavras.
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
 Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta estrutura:
 
 ⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
 ━━━━━━━━━━━━━━━━━━
-🏆 <b>TOP JOGOS DO DIA (A partir das 10h)</b>
-(Para cada jogo da lista acima, liste de forma objetiva:)
-- <b>[Time A] x [Time B]</b> ([Competição], [Horário])
-- Análise: [contexto/observação relevante, sem inventar dados]
-- Odd: [valor verificado, ou "sem entrada recomendada" se for o caso]
+🏆 <b>TOP APOSTAS DO DIA</b>
+(Para cada evento encontrado na busca, liste de forma objetiva:)
+- <b>[Time/Competidor A] x [Time/Competidor B]</b> ([Competição], [Horário])
+- Prováveis vencedor: [conforme fonte]
+- Odd: [valor, com fonte entre parênteses]
+- Se futebol: estatísticas prováveis (escanteios, gols, cartões, finalizações,
+  chutes ao gol), sempre com fonte
 
 ━━━━━━━━━━━━━━━━━━
 📊 <b>DESTAQUES E PROJEÇÕES</b>
-- Resumo analítico dos confrontos do dia, com base apenas nos dados fornecidos.
+- Resumo analítico dos eventos do dia, citando as fontes usadas.
 
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
-Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida.
-Aposte com responsabilidade.
+Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida;
+odds e estatísticas acima vêm de fontes públicas e podem mudar. Aposte com responsabilidade.
 
 Logo abaixo, inclua obrigatoriamente este bloco promocional:
 JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
@@ -127,61 +137,45 @@ https://superbet.onelink.me/Hqv6/03r54ds3
 
 def executar_robo_apostas():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
+    prompt_mestre = montar_prompt(data_hoje)
 
-    if not API_FOOTBALL_KEY:
-        print("Erro crítico: API_FOOTBALL_KEY não configurada.")
-        enviar_telegram(
-            "⚠️ <b>Robô de apostas não rodou hoje.</b>\n"
-            "Motivo: variável de ambiente API_FOOTBALL_KEY não configurada."
-        )
-        return
+    # Grounding com Google Search: necessário porque agora cobrimos qualquer
+    # esporte, "em todos os lugares" — não dá pra restringir a uma API só.
+    grounding_tool = types.Tool(google_search=types.GoogleSearch())
+    config = types.GenerateContentConfig(tools=[grounding_tool])
 
-    print(f"Buscando jogos reais via API-Football para {data_hoje} a partir das 10h...")
-    try:
-        jogos = buscar_jogos_do_dia(api_key=API_FOOTBALL_KEY, hora_minima=10)
-    except Exception as exc:
-        print(f"Erro crítico ao buscar jogos na API-Football: {exc}")
-        enviar_telegram(
-            "⚠️ <b>Robô de apostas não rodou hoje.</b>\n"
-            f"Motivo: falha ao buscar jogos na API-Football: {str(exc)[:300]}"
-        )
-        return
-
-    # Busca odds só para os jogos encontrados (evita gastar cota da API-Football à toa).
-    odds_por_fixture = {}
-    for jogo in jogos:
-        odds = buscar_odds_do_jogo(api_key=API_FOOTBALL_KEY, fixture_id=jogo["fixture_id"])
-        if odds:
-            odds_por_fixture[jogo["fixture_id"]] = odds
-
-    jogos_formatados = formatar_jogos_para_prompt(jogos, odds_por_fixture)
-
-    if not jogos:
-        print("Nenhum jogo encontrado para hoje — encerrando sem chamar o Gemini.")
-        enviar_telegram(
-            f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>\n\n"
-            "Nenhum jogo pré-jogo encontrado nas ligas monitoradas a partir das 10h de hoje."
-        )
-        return
-
-    prompt_mestre = montar_prompt(data_hoje, jogos_formatados)
-
-    print(f"Enviando {len(jogos)} jogos para análise do modelo {MODELO} (sem grounding)...")
+    print(f"Pesquisando apostas de hoje ({data_hoje}) com grounding via {MODELO}...")
     max_tentativas = 3
     tentativa = 0
     relatorio = None
     ultimo_erro = None
+    fontes = []
 
     while tentativa < max_tentativas:
         try:
-            # NOTE: sem `tools=[{"google_search": {}}]` — o Gemini não busca mais
-            # nada na web, só analisa os dados já fornecidos. Isso usa a cota
-            # normal de geração de texto, bem mais generosa que a de grounding.
             response = client.models.generate_content(
                 model=MODELO,
                 contents=prompt_mestre,
+                config=config,
             )
             relatorio = response.text
+
+            # Log das fontes usadas, para você conferir se o modelo pesquisou
+            # de verdade ou caiu de novo em modo "chute".
+            try:
+                candidato = response.candidates[0]
+                if candidato.grounding_metadata and candidato.grounding_metadata.grounding_chunks:
+                    fontes = [
+                        chunk.web.uri
+                        for chunk in candidato.grounding_metadata.grounding_chunks
+                        if chunk.web
+                    ]
+                    print(f"Fontes usadas na busca ({len(fontes)}): {fontes}")
+                else:
+                    print("Aviso: nenhuma fonte de busca retornada pelo Gemini.")
+            except (AttributeError, IndexError):
+                pass
+
             break
         except (ClientError, Exception) as e:
             ultimo_erro = e
@@ -201,8 +195,7 @@ def executar_robo_apostas():
         print("Erro crítico: Não foi possível obter resposta da API do Gemini.")
         enviar_telegram(
             "⚠️ <b>Robô de apostas não conseguiu gerar o relatório hoje.</b>\n"
-            f"Motivo: {str(ultimo_erro)[:300]}\n"
-            f"(Jogos encontrados pela API-Football: {len(jogos)} — o problema foi na etapa de análise do Gemini.)"
+            f"Motivo: {str(ultimo_erro)[:300]}"
         )
         return
 
