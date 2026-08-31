@@ -13,7 +13,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
 
-MODELO = "gemini-2.5-flash"  # Mantido para suporte a grounding gratuito via API
+MODELO = "gemini-3.6-flash"  # Atualizado para o modelo ativo e recomendado
 
 # Inicializa o cliente oficial moderno do Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -234,5 +234,3 @@ def executar_robo_apostas():
 
 if __name__ == "__main__":
     executar_robo_apostas()
-
-```
