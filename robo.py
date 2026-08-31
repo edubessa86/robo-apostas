@@ -128,9 +128,8 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
         "━━━━━━━━━━━━━━━━━━"
     ]
     
-    contador = 1
+    medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️", "⚽️"]
     if "ESPN" in origem:
-        medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️", "⚽️"]
         for idx, ev in enumerate(jogos[:6]):
             nome = ev.get('name', 'Confronto')
             data_str = ev.get('date', '')
@@ -150,7 +149,7 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
                 f"⚽️ Over 1.5 gols\n"
                 f"🚩 Escanteios: 8–11\n"
                 f"🟨 Cartões: 3–5\n"
-                f"🔮 Placar provável: 2x1 / 1x1\n"
+                f"🔮 Placar: 2x1 / 1x1\n"
                 f"💎 Melhor entrada: Dupla chance / Gols\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
@@ -169,8 +168,9 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
                 except:
                     pass
             league = item.get('league', {}).get('name', 'Competição')
+            medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
             bloco = (
-                f"⚽️ <b>{home} x {away}</b> ({league})\n"
+                f"{medalha} ⚽️ <b>{home} x {away}</b> ({league})\n"
                 f"🕟 {hora} 🇧🇷\n"
                 f"🎯 Mercado principal verificado\n"
                 f"📊 Odd mercado: ~1.50–1.80\n"
@@ -186,7 +186,7 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
         "🟢 9/10 → stake principal",
         "🟢 8–8.5/10 → stake moderada",
         "🟡 7–7.5/10 → stake reduzida",
-        "🔴 <7/10 → evitar",
+        "🔴 Abaixo de 7/10 → evitar",
         "⚠️ Odds são referências e mudam. Aposte com responsabilidade.",
         "",
         "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!",
@@ -228,7 +228,7 @@ DADOS DOS JOGOS DISPONÍVEIS:
 
 REGRAS OBRIGATÓRIAS:
 - Use APENAS os jogos presentes nos dados acima. NUNCA invente confrontos ou equipes que não constem na lista.
-- Siga rigorosamente a estrutura visual abaixo para o Telegram usando tags HTML (`<b>`, `<i>`).
+- Siga rigorosamente a estrutura visual abaixo para o Telegram usando tags HTML (`<b>`, `<i>`). NUNCA utilize o caractere menor que (<) solto (substitua por "abaixo de" se necessário para evitar erros de parse HTML).
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 
@@ -257,7 +257,7 @@ ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 🟢 9/10 → stake principal
 🟢 8–8.5/10 → stake moderada
 🟡 7–7.5/10 → stake reduzida
-🔴 <7/10 → evitar
+🔴 Abaixo de 7/10 → evitar
 ⚠️ Odds são referências e mudam.
 ⚠️ Confirme escalações antes de apostar.
 ⚠️ Não existe green garantido.
