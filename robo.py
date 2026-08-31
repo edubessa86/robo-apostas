@@ -13,7 +13,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
 
-MODELO = "gemini-3.6-flash"  # Atualizado para o modelo ativo e recomendado
+MODELO = "gemini-3.6-flash"
 
 # Inicializa o cliente oficial moderno do Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -49,7 +49,16 @@ def verificar_status_api_football(api_key: str) -> bool:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            requests_info = data.get("response", {}).get("requests", {})
+            resp_data = data.get("response", {})
+            
+            # Tratamento seguro caso a resposta venha como lista ou dicionário
+            if isinstance(resp_data, list):
+                requests_info = resp_data[0].get("requests", {}) if resp_data else {}
+            elif isinstance(resp_data, dict):
+                requests_info = resp_data.get("requests", {})
+            else:
+                requests_info = {}
+
             current = requests_info.get("current", 0)
             limit = requests_info.get("limit_day", 100)
             print(f"API-Football Status -> Consumidas hoje: {current}/{limit}")
@@ -222,11 +231,30 @@ def executar_robo_apostas():
                 time.sleep(tempo_espera)
 
     if not relatorio:
-        print("Erro crítico: Não foi possível obter resposta da API do Gemini.")
-        enviar_telegram(
-            "⚠️ <b>Robô de apostas não conseguiu gerar o relatório hoje.</b>\n"
-            f"Motivo: {str(ultimo_erro)[:300]}"
-        )
+        print("Erro crítico: Não foi possível obter resposta da API do Gemini devido à cota.")
+        # Fallback inteligente: se o Gemini estourar a cota mas temos dados das APIs de futebol/ESPN, enviamos o resumo direto
+        if dados_contexto and "Nenhum jogo retornado" not in dados_contexto:
+            relatorio_fallback = f"""⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
+━━━━━━━━━━━━━━━━━━
+🏆 <b>STATUS DO SISTEMA</b>
+O assistente de IA atingiu temporariamente o limite de cota da API (429), mas os dados foram capturados com sucesso pelas camadas de redundância.
+
+📊 <b>DADOS BRUTOS CAPTURADOS:</b>
+<code>{str(dados_contexto)[:1500]}</code>
+
+━━━━━━━━━━━━━━━━━━
+⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
+Mantenha rigor na gestão de banca e controle de stakes. Aposte com responsabilidade.
+
+JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
+Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
+https://superbet.onelink.me/Hqv6/03r54ds3"""
+            enviar_telegram(relatorio_fallback)
+        else:
+            enviar_telegram(
+                "⚠️ <b>Robô de apostas não conseguiu gerar o relatório hoje.</b>\n"
+                f"Motivo: {str(ultimo_erro)[:300]}"
+            )
         return
 
     enviar_telegram(relatorio)
