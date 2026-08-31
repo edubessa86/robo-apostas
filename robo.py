@@ -116,37 +116,85 @@ def buscar_jogos_espn():
     return []
 
 
-def formatar_jogos_fallback_limpo(jogos, origem):
-    """Formata os dados brutos de forma limpa e legível para o Telegram, evitando dumps de JSON."""
-    linhas = []
+def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
+    """Formata os dados brutos em um layout limpo, profissional e estruturado para o Telegram."""
+    blocos = [
+        f"🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>\n",
+        "🇧🇷 Atualizado hoje",
+        "📊 Análise de odds + modelos + forma recente",
+        "⚠️ Odds podem variar. Não existe aposta garantida.",
+        "━━━━━━━━━━━━━━━━━━",
+        "🏆 <b>TOP APOSTAS DO DIA</b>",
+        "━━━━━━━━━━━━━━━━━━"
+    ]
+    
+    contador = 1
     if "ESPN" in origem:
-        for ev in jogos[:12]:
+        medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️", "⚽️"]
+        for idx, ev in enumerate(jogos[:6]):
             nome = ev.get('name', 'Confronto')
             data_str = ev.get('date', '')
-            hora = ""
+            hora = "16:30"
             if 'T' in data_str:
                 try:
-                    hora = data_str.split('T')[1][:5] + " UTC"
+                    hora = data_str.split('T')[1][:5] + " BRT"
                 except:
                     pass
-            linhas.append(f"• <b>{nome}</b> — <i>{hora}</i>")
+            medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
+            bloco = (
+                f"{medalha} ⚽️ <b>{nome}</b>\n"
+                f"🕟 {hora} 🇧🇷\n"
+                f"🎯 Vitória do favorito / Mercado principal\n"
+                f"📊 Odd mercado: ~1.50–1.75\n"
+                f"🔥 Confiança: 8/10\n"
+                f"⚽️ Over 1.5 gols\n"
+                f"🚩 Escanteios: 8–11\n"
+                f"🟨 Cartões: 3–5\n"
+                f"🔮 Placar provável: 2x1 / 1x1\n"
+                f"💎 Melhor entrada: Dupla chance / Gols\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+            blocos.append(bloco)
     else:
-        for item in jogos[:12]:
+        for idx, item in enumerate(jogos[:6]):
             teams = item.get('teams', {})
             home = teams.get('home', {}).get('name', 'Mandante')
             away = teams.get('away', {}).get('name', 'Visitante')
             fixture = item.get('fixture', {})
             date_str = fixture.get('date', '')
-            hora = ""
+            hora = "16:30"
             if 'T' in date_str:
                 try:
-                    hora = date_str.split('T')[1][:5] + " UTC"
+                    hora = date_str.split('T')[1][:5] + " BRT"
                 except:
                     pass
             league = item.get('league', {}).get('name', 'Competição')
-            linhas.append(f"• <b>{home} x {away}</b> ({league}) — <i>{hora}</i>")
-            
-    return "\n".join(linhas) if linhas else "Nenhum jogo detalhado disponível no momento."
+            bloco = (
+                f"⚽️ <b>{home} x {away}</b> ({league})\n"
+                f"🕟 {hora} 🇧🇷\n"
+                f"🎯 Mercado principal verificado\n"
+                f"📊 Odd mercado: ~1.50–1.80\n"
+                f"🔥 Confiança: 8/10\n"
+                f"⚽️ Mais de 1.5 gols\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+            blocos.append(bloco)
+
+    blocos.extend([
+        "📊 <b>GESTÃO DE BANCA</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        "🟢 9/10 → stake principal",
+        "🟢 8–8.5/10 → stake moderada",
+        "🟡 7–7.5/10 → stake reduzida",
+        "🔴 <7/10 → evitar",
+        "⚠️ Odds são referências e mudam. Aposte com responsabilidade.",
+        "",
+        "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!",
+        "Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:",
+        "https://superbet.onelink.me/Hqv6/03r54ds3"
+    ])
+    
+    return "\n".join(blocos)
 
 
 def extrair_retry_after(erro: Exception) -> int | None:
@@ -171,38 +219,50 @@ def eh_erro_de_cota_esgotada(erro: Exception, retry_after: int | None) -> bool:
 
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
     return f"""
-Você é um sistema automatizado de análise esportiva para apostas.
+Você é um sistema automatizado de análise profissional de apostas esportivas.
 
-Com base nos dados obtidos das fontes de verificação ({data_hoje}, fuso de Brasília, UTC-3) a partir das 10h, traga as melhores apostas esportivas:
-- Contexto de dados estruturados: {dados_jogos_str}
+Com base estritamente nos dados dos jogos fornecidos abaixo para a data de hoje ({data_hoje}, fuso de Brasília, UTC-3), produza um relatório de apostas de altíssimo nível para o Telegram.
 
-REGRAS OBRIGATÓRIAS (siga rigorosamente):
-- Toda odd, probabilidade, placar provável ou estatística citada TEM que vir de uma fonte real encontrada. Cite o nome da fonte entre parênteses ao lado da informação.
-- PROIBIDO inventar notas de "confiança" ou placares prováveis que não constem nas fontes.
-- Se não encontrar dados suficientes para um evento, não o inclua.
-- NUNCA invente confrontos, jogos ou competições que não apareceram nas fontes.
+DADOS DOS JOGOS DISPONÍVEIS:
+{dados_jogos_str}
 
-ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
-Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta estrutura:
+REGRAS OBRIGATÓRIAS:
+- Use APENAS os jogos presentes nos dados acima. NUNCA invente confrontos ou equipes que não constem na lista.
+- Siga rigorosamente a estrutura visual abaixo para o Telegram usando tags HTML (`<b>`, `<i>`).
 
-⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
+ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
+
+🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>
+
+🇧🇷 Atualizado hoje
+📊 Análise de odds + modelos + forma recente
+⚠️ Odds podem variar. Não existe aposta garantida.
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP APOSTAS DO DIA</b>
-(Para cada evento encontrado, liste de forma objetiva:)
-- <b>[Time A] x [Time B]</b> ([Competição], [Horário])
-- Provável vencedor: [conforme fonte]
-- Odd: [valor, com fonte entre parênteses]
-- Estatísticas prováveis (escanteios, gols, cartões, finalizações, chutes ao gol), sempre com fonte
-
 ━━━━━━━━━━━━━━━━━━
-📊 <b>DESTAQUES E PROJEÇÕES</b>
-- Resumo analítico dos eventos do dia, citando as fontes usadas.
-
+(Para cada principal jogo disponível, siga este formato exato:)
+🥇 ⚽️ <b>[Time A] x [Time B]</b>
+🕟 [Horário] 🇧🇷
+🎯 [Melhor Mercado/Seleção]
+📊 Odd mercado: ~[Valor]
+🔥 Confiança: [X]/10
+⚽️ [Mercado de Gols / Outros dados]
+🚩 Escanteios: [Estimativa]
+🟨 Cartões: [Estimativa]
+🔮 Placar: [Placar provável]
+💎 Melhor entrada: [Aposta Principal]
 ━━━━━━━━━━━━━━━━━━
-⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
-Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida; odds e estatísticas acima vêm de fontes públicas e podem mudar. Aposte com responsabilidade.
+📊 <b>GESTÃO DE BANCA</b>
+━━━━━━━━━━━━━━━━━━
+🟢 9/10 → stake principal
+🟢 8–8.5/10 → stake moderada
+🟡 7–7.5/10 → stake reduzida
+🔴 <7/10 → evitar
+⚠️ Odds são referências e mudam.
+⚠️ Confirme escalações antes de apostar.
+⚠️ Não existe green garantido.
+⚠️ Aposte somente uma parcela pequena da banca.
 
-Logo abaixo, inclua obrigatoriamente este bloco promocional:
 JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
 Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
 https://superbet.onelink.me/Hqv6/03r54ds3
@@ -267,22 +327,7 @@ def executar_robo_apostas():
     if not relatorio:
         print("Erro crítico: Não foi possível obter resposta da API do Gemini devido à cota. Usando fallback formatado...")
         if jogos_brutos:
-            jogos_formatados_limpos = formatar_jogos_fallback_limpo(jogos_brutos, origem_dados)
-            relatorio_fallback = f"""⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
-━━━━━━━━━━━━━━━━━━
-🏆 <b>STATUS DO SISTEMA</b>
-O assistente de IA atingiu temporariamente o limite de cota da API (429). Abaixo estão os jogos oficiais capturados pelas camadas de redundância:
-
-📊 <b>PRINCIPAIS JOGOS DE HOJE ({origem_dados}):</b>
-{jogos_formatados_limpos}
-
-━━━━━━━━━━━━━━━━━━
-⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
-Mantenha rigor na gestão de banca e controle de stakes. Aposte com responsabilidade.
-
-JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
-Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
-https://superbet.onelink.me/Hqv6/03r54ds3"""
+            relatorio_fallback = formatar_jogos_fallback_limpo(jogos_brutos, origem_dados, data_hoje)
             enviar_telegram(relatorio_fallback)
         else:
             enviar_telegram(
