@@ -40,7 +40,7 @@ def enviar_telegram(texto: str) -> None:
 
 
 def verificar_status_api_football(api_key: str) -> bool:
-    """Camada de precaução: Verifica cota e status via endpoint /status antes de gastar requisições."""
+    """Verifica cota e status via endpoint /status antes de gastar requisições."""
     if not api_key:
         return False
     url = "https://v3.football.api-sports.io/status"
@@ -50,8 +50,6 @@ def verificar_status_api_football(api_key: str) -> bool:
         if response.status_code == 200:
             data = response.json()
             resp_data = data.get("response", {})
-            
-            # Tratamento seguro caso a resposta venha como lista ou dicionário
             if isinstance(resp_data, list):
                 requests_info = resp_data[0].get("requests", {}) if resp_data else {}
             elif isinstance(resp_data, dict):
@@ -72,7 +70,7 @@ def verificar_status_api_football(api_key: str) -> bool:
 
 
 def buscar_jogos_api_football_com_fallback(data_hoje_iso: str):
-    """Gerencia API Principal (Key 1) e Secundária (Key 2) com verificação prévia de cota."""
+    """Gerencia API Principal e Secundária com verificação prévia de cota."""
     chaves = [
         ("API Principal (API_FOOTBALL_KEY)", API_FOOTBALL_KEY),
         ("API Secundária (API_FOOTBALL_KEY_2)", API_FOOTBALL_KEY_2)
@@ -116,6 +114,39 @@ def buscar_jogos_espn():
     except Exception as e:
         print(f"Erro ao consultar endpoint público da ESPN: {e}")
     return []
+
+
+def formatar_jogos_fallback_limpo(jogos, origem):
+    """Formata os dados brutos de forma limpa e legível para o Telegram, evitando dumps de JSON."""
+    linhas = []
+    if "ESPN" in origem:
+        for ev in jogos[:12]:
+            nome = ev.get('name', 'Confronto')
+            data_str = ev.get('date', '')
+            hora = ""
+            if 'T' in data_str:
+                try:
+                    hora = data_str.split('T')[1][:5] + " UTC"
+                except:
+                    pass
+            linhas.append(f"• <b>{nome}</b> — <i>{hora}</i>")
+    else:
+        for item in jogos[:12]:
+            teams = item.get('teams', {})
+            home = teams.get('home', {}).get('name', 'Mandante')
+            away = teams.get('away', {}).get('name', 'Visitante')
+            fixture = item.get('fixture', {})
+            date_str = fixture.get('date', '')
+            hora = ""
+            if 'T' in date_str:
+                try:
+                    hora = date_str.split('T')[1][:5] + " UTC"
+                except:
+                    pass
+            league = item.get('league', {}).get('name', 'Competição')
+            linhas.append(f"• <b>{home} x {away}</b> ({league}) — <i>{hora}</i>")
+            
+    return "\n".join(linhas) if linhas else "Nenhum jogo detalhado disponível no momento."
 
 
 def extrair_retry_after(erro: Exception) -> int | None:
@@ -182,16 +213,19 @@ def executar_robo_apostas():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     data_hoje_iso = datetime.now().strftime("%Y-%m-%d")
 
-    # 1ª e 2ª Camada: API-Football (Chave 1 e Chave 2 com verificação prévia de status)
     jogos_brutos, fonte_usada = buscar_jogos_api_football_com_fallback(data_hoje_iso)
     
     dados_contexto = ""
+    origem_dados = "API-Football"
     if jogos_brutos:
+        origem_dados = fonte_usada
         dados_contexto = f"Partidas obtidas via {fonte_usada}: {str(jogos_brutos[:15])}"
     else:
         print("APIs de Futebol (Principal e Secundária) indisponíveis ou sem jogos. Acionando Camada 3 (ESPN)...")
         eventos_espn = buscar_jogos_espn()
         if eventos_espn:
+            origem_dados = "Conferência cruzada ESPN"
+            jogos_brutos = eventos_espn
             dados_contexto = f"Partidas obtidas via conferência cruzada ESPN: {str(eventos_espn[:15])}"
         else:
             dados_contexto = "Nenhum jogo retornado pelas APIs estruturadas; utilize rigorosamente o Grounding do Google Search."
@@ -231,16 +265,16 @@ def executar_robo_apostas():
                 time.sleep(tempo_espera)
 
     if not relatorio:
-        print("Erro crítico: Não foi possível obter resposta da API do Gemini devido à cota.")
-        # Fallback inteligente: se o Gemini estourar a cota mas temos dados das APIs de futebol/ESPN, enviamos o resumo direto
-        if dados_contexto and "Nenhum jogo retornado" not in dados_contexto:
+        print("Erro crítico: Não foi possível obter resposta da API do Gemini devido à cota. Usando fallback formatado...")
+        if jogos_brutos:
+            jogos_formatados_limpos = formatar_jogos_fallback_limpo(jogos_brutos, origem_dados)
             relatorio_fallback = f"""⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>STATUS DO SISTEMA</b>
-O assistente de IA atingiu temporariamente o limite de cota da API (429), mas os dados foram capturados com sucesso pelas camadas de redundância.
+O assistente de IA atingiu temporariamente o limite de cota da API (429). Abaixo estão os jogos oficiais capturados pelas camadas de redundância:
 
-📊 <b>DADOS BRUTOS CAPTURADOS:</b>
-<code>{str(dados_contexto)[:1500]}</code>
+📊 <b>PRINCIPAIS JOGOS DE HOJE ({origem_dados}):</b>
+{jogos_formatados_limpos}
 
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
