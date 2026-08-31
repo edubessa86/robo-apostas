@@ -1,3 +1,4 @@
+```python
 from datetime import datetime
 import os
 import time
@@ -10,9 +11,10 @@ import requests
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
+API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
 
-MODELO = "gemini-2.5-flash"  # gemini-3.6-flash não tem grounding grátis via API (só no AI Studio);
-                              # gemini-2.5-flash tem até 500 buscas grátis/dia, suficiente para 1 run diário.
+MODELO = "gemini-2.5-flash"  # Mantido para suporte a grounding gratuito via API
 
 # Inicializa o cliente oficial moderno do Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -38,10 +40,77 @@ def enviar_telegram(texto: str) -> None:
             print(f"Falha de rede ao enviar para o Telegram: {exc}")
 
 
+def verificar_status_api_football(api_key: str) -> bool:
+    """Camada de precaução: Verifica cota e status via endpoint /status antes de gastar requisições."""
+    if not api_key:
+        return False
+    url = "https://v3.football.api-sports.io/status"
+    headers = {"x-apisports-key": api_key}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            requests_info = data.get("response", {}).get("requests", {})
+            current = requests_info.get("current", 0)
+            limit = requests_info.get("limit_day", 100)
+            print(f"API-Football Status -> Consumidas hoje: {current}/{limit}")
+            if current < limit:
+                return True
+        else:
+            print(f"Erro ao checar status da API-Football: {response.status_code}")
+    except Exception as e:
+        print(f"Falha de conexão ao checar status da API-Football: {e}")
+    return False
+
+
+def buscar_jogos_api_football_com_fallback(data_hoje_iso: str):
+    """Gerencia API Principal (Key 1) e Secundária (Key 2) com verificação prévia de cota."""
+    chaves = [
+        ("API Principal (API_FOOTBALL_KEY)", API_FOOTBALL_KEY),
+        ("API Secundária (API_FOOTBALL_KEY_2)", API_FOOTBALL_KEY_2)
+    ]
+    
+    for nome, chave in chaves:
+        if not chave:
+            continue
+        print(f"Verificando cota da {nome}...")
+        if verificar_status_api_football(chave):
+            print(f"Buscando partidas do dia {data_hoje_iso} via {nome}...")
+            url = f"https://v3.football.api-sports.io/fixtures?date={data_hoje_iso}"
+            headers = {"x-apisports-key": chave}
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    dados = resp.json().get("response", [])
+                    if dados:
+                        print(f"Sucesso! Encontrados {len(dados)} jogos via {nome}.")
+                        return dados, nome
+                    else:
+                        print(f"{nome} retornou 0 jogos para hoje.")
+            except Exception as e:
+                print(f"Erro ao requisitar jogos via {nome}: {e}")
+        else:
+            print(f"{nome} sem cota disponível ou falha na validação de status.")
+    return None, None
+
+
+def buscar_jogos_espn():
+    """Terceira camada de precaução: Conferência cruzada via endpoint público de placares da ESPN."""
+    print("Acionando 3ª camada de precaução: Conferência cruzada via endpoint público da ESPN...")
+    url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            eventos = data.get("events", [])
+            print(f"ESPN retornou {len(eventos)} eventos para cruzamento.")
+            return eventos
+    except Exception as e:
+        print(f"Erro ao consultar endpoint público da ESPN: {e}")
+    return []
+
+
 def extrair_retry_after(erro: Exception) -> int | None:
-    """Tenta extrair o tempo de espera sugerido pela própria API (quando presente
-    no corpo do erro 429), em vez de usar um backoff fixo às cegas.
-    """
     try:
         detalhes = getattr(erro, "details", None) or {}
         for item in detalhes.get("error", {}).get("details", []):
@@ -55,57 +124,24 @@ def extrair_retry_after(erro: Exception) -> int | None:
 
 
 def eh_erro_de_cota_esgotada(erro: Exception, retry_after: int | None) -> bool:
-    """Sem RetryInfo sugerido pela API, tratamos como esgotamento sério
-    (diário/hard-cap) — retry curto não ajuda nesse caso.
-    """
     if retry_after is not None:
         return False
     texto_erro = str(erro).lower()
     return "resource_exhausted" in texto_erro.replace(" ", "") or "429" in texto_erro
 
 
-def montar_prompt(data_hoje: str) -> str:
-    """Monta o prompt para o Gemini.
-
-    Esta versão usa grounding com Google Search (ver `config` em
-    `executar_robo_apostas`) porque agora cobrimos qualquer esporte, não só
-    futebol — a API-Football sozinha não dá conta disso.
-
-    IMPORTANTE: como não há mais uma lista de jogos pré-verificada vindo de
-    uma API, a única defesa contra hallucination aqui são estas regras de
-    citação obrigatória. Sem uma fonte real por trás de cada número, o
-    modelo tende a inventar "confiança" e placares — por isso isso é
-    proibido explicitamente abaixo.
-    """
+def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
     return f"""
 Você é um sistema automatizado de análise esportiva para apostas.
 
-Pesquise na internet (em todos os lugares: sites de estatística esportiva,
-casas de apostas, portais de notícias esportivas) e traga todas as apostas
-esportivas de qualquer esporte de hoje ({data_hoje}, fuso de Brasília, UTC-3)
-a partir das 10h. Para cada evento encontrado, traga:
-- Os confrontos do dia
-- Prováveis vencedores
-- Odds confiáveis para apostar
-- Caso seja futebol: prováveis quantidade de escanteios, gols, cartões,
-  finalizações e chutes ao gol
+Com base nos dados obtidos das fontes de verificação ({data_hoje}, fuso de Brasília, UTC-3) a partir das 10h, traga as melhores apostas esportivas:
+- Contexto de dados estruturados: {dados_jogos_str}
 
 REGRAS OBRIGATÓRIAS (siga rigorosamente):
-- Toda odd, probabilidade, placar provável ou estatística (escanteios, gols,
-  cartões, finalizações, chutes ao gol) que você citar TEM que vir de uma
-  fonte real que você encontrou na busca. Cite o nome do site entre
-  parênteses ao lado da informação, como "(SportyTrader)" ou "(Forebet)".
-- PROIBIDO inventar uma nota de "confiança" própria (ex: 8/10, 9.5/10) que
-  não tenha sido dita por nenhuma fonte. Se quiser comunicar confiança, use
-  apenas o que a própria fonte afirmou (ex: "Forebet aponta 60% de chance de
-  vitória"), nunca um número inventado por você.
-- PROIBIDO inventar um placar provável que não tenha sido citado por
-  nenhuma fonte encontrada na busca.
-- Se não encontrar dados suficientemente confiáveis e citáveis para um
-  evento, não o inclua no relatório — não complete com estimativas soltas.
-- NUNCA invente confrontos, jogos, times ou competições que não apareceram
-  nas buscas.
-- Não copie frases inteiras das fontes; resuma com suas próprias palavras.
+- Toda odd, probabilidade, placar provável ou estatística citada TEM que vir de uma fonte real encontrada. Cite o nome da fonte entre parênteses ao lado da informação.
+- PROIBIDO inventar notas de "confiança" ou placares prováveis que não constem nas fontes.
+- Se não encontrar dados suficientes para um evento, não o inclua.
+- NUNCA invente confrontos, jogos ou competições que não apareceram nas fontes.
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA O TELEGRAM (HTML)
 Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta estrutura:
@@ -113,12 +149,11 @@ Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta e
 ⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP APOSTAS DO DIA</b>
-(Para cada evento encontrado na busca, liste de forma objetiva:)
-- <b>[Time/Competidor A] x [Time/Competidor B]</b> ([Competição], [Horário])
-- Prováveis vencedor: [conforme fonte]
+(Para cada evento encontrado, liste de forma objetiva:)
+- <b>[Time A] x [Time B]</b> ([Competição], [Horário])
+- Provável vencedor: [conforme fonte]
 - Odd: [valor, com fonte entre parênteses]
-- Se futebol: estatísticas prováveis (escanteios, gols, cartões, finalizações,
-  chutes ao gol), sempre com fonte
+- Estatísticas prováveis (escanteios, gols, cartões, finalizações, chutes ao gol), sempre com fonte
 
 ━━━━━━━━━━━━━━━━━━
 📊 <b>DESTAQUES E PROJEÇÕES</b>
@@ -126,8 +161,7 @@ Utilize tags HTML limpas do Telegram (`<b>`, `<i>`) seguindo estritamente esta e
 
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
-Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida;
-odds e estatísticas acima vêm de fontes públicas e podem mudar. Aposte com responsabilidade.
+Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida; odds e estatísticas acima vêm de fontes públicas e podem mudar. Aposte com responsabilidade.
 
 Logo abaixo, inclua obrigatoriamente este bloco promocional:
 JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
@@ -138,19 +172,32 @@ https://superbet.onelink.me/Hqv6/03r54ds3
 
 def executar_robo_apostas():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
-    prompt_mestre = montar_prompt(data_hoje)
+    data_hoje_iso = datetime.now().strftime("%Y-%m-%d")
 
-    # Grounding com Google Search: necessário porque agora cobrimos qualquer
-    # esporte, "em todos os lugares" — não dá pra restringir a uma API só.
+    # 1ª e 2ª Camada: API-Football (Chave 1 e Chave 2 com verificação prévia de status)
+    jogos_brutos, fonte_usada = buscar_jogos_api_football_com_fallback(data_hoje_iso)
+    
+    dados_contexto = ""
+    if jogos_brutos:
+        dados_contexto = f"Partidas obtidas via {fonte_usada}: {str(jogos_brutos[:15])}"
+    else:
+        print("APIs de Futebol (Principal e Secundária) indisponíveis ou sem jogos. Acionando Camada 3 (ESPN)...")
+        eventos_espn = buscar_jogos_espn()
+        if eventos_espn:
+            dados_contexto = f"Partidas obtidas via conferência cruzada ESPN: {str(eventos_espn[:15])}"
+        else:
+            dados_contexto = "Nenhum jogo retornado pelas APIs estruturadas; utilize rigorosamente o Grounding do Google Search."
+
+    prompt_mestre = montar_prompt(data_hoje, dados_contexto)
+
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool])
 
-    print(f"Pesquisando apostas de hoje ({data_hoje}) com grounding via {MODELO}...")
+    print(f"Gerando análise de apostas para hoje ({data_hoje}) via {MODELO}...")
     max_tentativas = 3
     tentativa = 0
     relatorio = None
     ultimo_erro = None
-    fontes = []
 
     while tentativa < max_tentativas:
         try:
@@ -160,23 +207,6 @@ def executar_robo_apostas():
                 config=config,
             )
             relatorio = response.text
-
-            # Log das fontes usadas, para você conferir se o modelo pesquisou
-            # de verdade ou caiu de novo em modo "chute".
-            try:
-                candidato = response.candidates[0]
-                if candidato.grounding_metadata and candidato.grounding_metadata.grounding_chunks:
-                    fontes = [
-                        chunk.web.uri
-                        for chunk in candidato.grounding_metadata.grounding_chunks
-                        if chunk.web
-                    ]
-                    print(f"Fontes usadas na busca ({len(fontes)}): {fontes}")
-                else:
-                    print("Aviso: nenhuma fonte de busca retornada pelo Gemini.")
-            except (AttributeError, IndexError):
-                pass
-
             break
         except (ClientError, Exception) as e:
             ultimo_erro = e
@@ -184,7 +214,7 @@ def executar_robo_apostas():
             retry_sugerido = extrair_retry_after(e)
 
             if eh_erro_de_cota_esgotada(e, retry_sugerido):
-                print(f"Cota esgotada sem sugestão de retry da API: {e}. Abortando tentativas.")
+                print(f"Cota esgotada na API do Gemini: {e}. Abortando.")
                 break
 
             tempo_espera = retry_sugerido or (tentativa * 45)
@@ -205,3 +235,5 @@ def executar_robo_apostas():
 
 if __name__ == "__main__":
     executar_robo_apostas()
+
+```
