@@ -95,4 +95,4 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje, api_football_key=Non
         "https://superbet.onelink.me/Hqv6/03r54ds3",
     ])
 
-    return "\n".join(blocos)
+    return "\n".join(blocos)`
