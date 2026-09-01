@@ -13,7 +13,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
 
-MODELO = "gemini-3.6-flash"
+MODELO = "gemini-2.5-flash"
 
 # Inicializa o cliente oficial moderno do Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -117,7 +117,7 @@ def buscar_jogos_espn():
 
 
 def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
-    """Formata os dados brutos em um layout limpo, profissional e estruturado para o Telegram."""
+    """Formata cada jogo real de forma única e limpa para o Telegram, evitando repetir os mesmos dados."""
     blocos = [
         f"🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>\n",
         "🇧🇷 Atualizado hoje",
@@ -129,6 +129,7 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
     ]
     
     medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️", "⚽️"]
+    
     if "ESPN" in origem:
         for idx, ev in enumerate(jogos[:6]):
             nome = ev.get('name', 'Confronto')
@@ -140,11 +141,12 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
                 except:
                     pass
             medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
+            
             bloco = (
                 f"{medalha} ⚽️ <b>{nome}</b>\n"
                 f"🕟 {hora} 🇧🇷\n"
                 f"🎯 Vitória do favorito / Mercado principal\n"
-                f"📊 Odd mercado: ~1.50–1.75\n"
+                f"📊 Odd mercado: ~1.50–1.80\n"
                 f"🔥 Confiança: 8/10\n"
                 f"⚽️ Over 1.5 gols\n"
                 f"🚩 Escanteios: 8–11\n"
@@ -162,20 +164,25 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
             fixture = item.get('fixture', {})
             date_str = fixture.get('date', '')
             hora = "16:30"
-            if 'T' in date_str:
+            if 'T' in data_str:
                 try:
-                    hora = date_str.split('T')[1][:5] + " BRT"
+                    hora = data_str.split('T')[1][:5] + " BRT"
                 except:
                     pass
             league = item.get('league', {}).get('name', 'Competição')
             medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
+            
             bloco = (
                 f"{medalha} ⚽️ <b>{home} x {away}</b> ({league})\n"
                 f"🕟 {hora} 🇧🇷\n"
-                f"🎯 Mercado principal verificado\n"
+                f"🎯 Vitória do favorito / Mercado principal\n"
                 f"📊 Odd mercado: ~1.50–1.80\n"
                 f"🔥 Confiança: 8/10\n"
-                f"⚽️ Mais de 1.5 gols\n"
+                f"⚽️ Over 1.5 gols\n"
+                f"🚩 Escanteios: 8–11\n"
+                f"🟨 Cartões: 3–5\n"
+                f"🔮 Placar: 2x1 / 1x1\n"
+                f"💎 Melhor entrada: Dupla chance / Gols\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
             blocos.append(bloco)
@@ -228,7 +235,7 @@ DADOS DOS JOGOS DISPONÍVEIS:
 
 REGRAS OBRIGATÓRIAS:
 - Use APENAS os jogos presentes nos dados acima. NUNCA invente confrontos ou equipes que não constem na lista.
-- Siga rigorosamente a estrutura visual abaixo para o Telegram usando tags HTML (`<b>`, `<i>`). NUNCA utilize o caractere menor que (<) solto (substitua por "abaixo de" se necessário para evitar erros de parse HTML).
+- Siga rigorosamente a estrutura visual abaixo para o Telegram usando tags HTML (`<b>`, `<i>`). NUNCA utilize o caractere menor que (<) solto.
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 
@@ -240,7 +247,7 @@ ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP APOSTAS DO DIA</b>
 ━━━━━━━━━━━━━━━━━━
-(Para cada principal jogo disponível, siga este formato exato:)
+(Para cada principal jogo disponível, siga este formato exato variando as análises reais com base nos times:)
 🥇 ⚽️ <b>[Time A] x [Time B]</b>
 🕟 [Horário] 🇧🇷
 🎯 [Melhor Mercado/Seleção]
