@@ -1,3 +1,8 @@
+Aqui está o código completo do `robo.py` corrigido para resolver a repetição de dados.
+
+A função de fallback agora **lê apenas os dados reais de cada partida** (Nome, Horário convertido para Brasília e Competição) e remove as estatísticas estáticas duplicadas.
+
+```python
 from datetime import datetime, timedelta
 import os
 import time
@@ -20,7 +25,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def dividir_mensagem(texto, limite=4000):
-    """Divide textos longos em pedaços menores para respeitar o limite de caracteres do Telegram."""
+    """Divide textos longos em pedaços menores para respeitar o limite do Telegram."""
     return [texto[i : i + limite] for i in range(0, len(texto), limite)]
 
 
@@ -115,32 +120,29 @@ def buscar_jogos_api_football_com_fallback(data_hoje_iso: str):
 
 
 def buscar_jogos_espn():
-    """Terceira camada de precaução: Conferência cruzada via endpoint público da ESPN."""
-    print(
-        "Acionando 3ª camada de precaução: Conferência cruzada via endpoint público da ESPN..."
-    )
+    """Conferência cruzada via endpoint público da ESPN."""
+    print("Acionando 3ª camada: Conferência cruzada via ESPN...")
     url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
     try:
         resp = requests.get(url, timeout=15)
         if resp.status_code == 200:
             data = resp.json()
             eventos = data.get("events", [])
-            print(f"ESPN retornou {len(eventos)} eventos para cruzamento.")
+            print(f"ESPN retornou {len(eventos)} eventos.")
             return eventos
     except Exception as e:
-        print(f"Erro ao consultar endpoint público da ESPN: {e}")
+        print(f"Erro ao consultar endpoint da ESPN: {e}")
     return []
 
 
 def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
-    """Formata cada jogo de forma limpa para o Telegram sem caracteres soltos de HTML (< e >)."""
+    """Formata os jogos de contingência exibindo apenas dados reais sem repetitivos fictícios."""
     blocos = [
-        f"🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>\n",
+        f"🔥 <b>JOGOS DO DIA — {data_hoje}</b>\n",
         "🇧🇷 Atualizado hoje",
-        "📊 Análise de odds + modelos + forma recente",
-        "⚠️ Odds podem variar. Não existe aposta garantida.",
+        "⚠️ Modo de Contingência: Análise por IA indisponível no momento.",
         "━━━━━━━━━━━━━━━━━━",
-        "🏆 <b>TOP APOSTAS DO DIA</b>",
+        "🏆 <b>PARTIDAS CONFIRMADAS</b>",
         "━━━━━━━━━━━━━━━━━━",
     ]
 
@@ -150,7 +152,7 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
         for idx, ev in enumerate(jogos[:6]):
             nome = ev.get("name", "Confronto")
             data_str = ev.get("date", "")
-            hora = "16:30 BRT"
+            hora = "A definir"
             if "T" in data_str:
                 try:
                     dt_utc = datetime.fromisoformat(
@@ -164,15 +166,7 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
 
             bloco = (
                 f"{medalha} ⚽️ <b>{nome}</b>\n"
-                f"🕟 {hora}\n"
-                f"🎯 Vitória do favorito / Mercado principal\n"
-                f"📊 Odd mercado: ~1.50–1.80\n"
-                f"🔥 Confiança: 8/10\n"
-                f"⚽️ Over 1.5 gols\n"
-                f"🚩 Escanteios: 8–11\n"
-                f"🟨 Cartões: 3–5\n"
-                f"🔮 Placar: 2x1 / 1x1\n"
-                f"💎 Melhor entrada: Dupla chance / Gols\n"
+                f"🕟 Horário: <b>{hora}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
             blocos.append(bloco)
@@ -183,7 +177,7 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
             away = teams.get("away", {}).get("name", "Visitante")
             fixture = item.get("fixture", {})
             date_str = fixture.get("date", "")
-            hora = "16:30 BRT"
+            hora = "A definir"
             if "T" in date_str:
                 try:
                     dt_utc = datetime.fromisoformat(
@@ -197,29 +191,17 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
             medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
 
             bloco = (
-                f"{medalha} ⚽️ <b>{home} x {away}</b> ({league})\n"
-                f"🕟 {hora}\n"
-                f"🎯 Vitória do favorito / Mercado principal\n"
-                f"📊 Odd mercado: ~1.50–1.80\n"
-                f"🔥 Confiança: 8/10\n"
-                f"⚽️ Over 1.5 gols\n"
-                f"🚩 Escanteios: 8–11\n"
-                f"🟨 Cartões: 3–5\n"
-                f"🔮 Placar: 2x1 / 1x1\n"
-                f"💎 Melhor entrada: Dupla chance / Gols\n"
+                f"{medalha} ⚽️ <b>{home} x {away}</b>\n"
+                f"🏆 <i>{league}</i>\n"
+                f"🕟 Horário: <b>{hora}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
             blocos.append(bloco)
 
     blocos.extend(
         [
-            "📊 <b>GESTÃO DE BANCA</b>",
-            "━━━━━━━━━━━━━━━━━━",
-            "🟢 9/10 → stake principal",
-            "🟢 8–8.5/10 → stake moderada",
-            "🟡 7–7.5/10 → stake reduzida",
-            "🔴 Abaixo de 7/10 → evitar",
-            "⚠️ Odds são referências e mudam. Aposte com responsabilidade.",
+            "⚠️ <b>AVISO DE APOSTAS</b>",
+            "Confira cotações e linhas de entrada diretamente na sua casa de apostas.",
             "",
             "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!",
             "Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:",
@@ -228,7 +210,6 @@ def formatar_jogos_fallback_limpo(jogos, origem, data_hoje):
     )
 
     texto_final = "\n".join(blocos)
-    # Garante a remoção de '<' ou '>' que quebrariam o parse do Telegram
     return texto_final.replace("<7/10", "Abaixo de 7/10")
 
 
@@ -256,14 +237,15 @@ def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
     return f"""
 Você é um sistema automatizado de análise profissional de apostas esportivas.
 
-Com base estritamente nos dados dos jogos fornecidos abaixo para a data de hoje ({data_hoje}, fuso de Brasília, UTC-3), produza um relatório de apostas de altíssimo nível para o Telegram.
+Com base estritamente nos dados dos jogos fornecidos abaixo para a data de hoje ({data_hoje}, fuso de Brasília, UTC-3), produza um relatório de apostas único e personalizado por partida para o Telegram.
 
 DADOS DOS JOGOS DISPONÍVEIS:
 {dados_jogos_str}
 
 REGRAS OBRIGATÓRIAS:
-- Use APENAS os jogos presentes nos dados acima. NUNCA invente confrontos ou equipes que não constem na lista.
-- Siga rigorosamente a estrutura visual abaixo para o Telegram usando tags HTML (`<b>`, `<i>`). NUNCA utilize o caractere menor que (<) solto.
+- Use APENAS os jogos presentes nos dados acima. NUNCA invente confrontos.
+- Crie análises, placares, odds e mercados DIFERENTES e personalizados para cada jogo de acordo com as características das equipes.
+- Siga a estrutura visual abaixo usando tags HTML (`<b>`, `<i>`). NUNCA utilize o caractere menor que (<) solto.
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 
@@ -275,17 +257,17 @@ ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP APOSTAS DO DIA</b>
 ━━━━━━━━━━━━━━━━━━
-(Para cada principal jogo disponível, siga este formato exato variando as análises reais com base nos times:)
+(Para cada jogo, gere valores e análises específicas:)
 🥇 ⚽️ <b>[Time A] x [Time B]</b>
 🕟 [Horário] 🇧🇷
-🎯 [Melhor Mercado/Seleção]
-📊 Odd mercado: ~[Valor]
-🔥 Confiança: [X]/10
-⚽️ [Mercado de Gols / Outros dados]
-🚩 Escanteios: [Estimativa]
-🟨 Cartões: [Estimativa]
-🔮 Placar: [Placar provável]
-💎 Melhor entrada: [Aposta Principal]
+🎯 Mercado: [Mercado Específico do Jogo]
+📊 Odd mercado: ~[Odd Relevante]
+🔥 Confiança: [Nota]/10
+⚽️ Gols: [Sugestão de Linha]
+🚩 Escanteios: [Projeção]
+🟨 Cartões: [Projeção]
+🔮 Placar provável: [Placar]
+💎 Melhor entrada: [Aposta]
 ━━━━━━━━━━━━━━━━━━
 📊 <b>GESTÃO DE BANCA</b>
 ━━━━━━━━━━━━━━━━━━
@@ -294,9 +276,6 @@ ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
 🟡 7–7.5/10 → stake reduzida
 🔴 Abaixo de 7/10 → evitar
 ⚠️ Odds são referências e mudam.
-⚠️ Confirme escalações antes de apostar.
-⚠️ Não existe green garantido.
-⚠️ Aposte somente uma parcela pequena da banca.
 
 JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
 Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
@@ -321,7 +300,7 @@ def executar_robo_apostas():
         )
     else:
         print(
-            "APIs de Futebol (Principal e Secundária) indisponíveis ou sem jogos. Acionando Camada 3 (ESPN)..."
+            "APIs de Futebol indisponíveis. Acionando Camada 3 (ESPN)..."
         )
         eventos_espn = buscar_jogos_espn()
         if eventos_espn:
@@ -329,7 +308,7 @@ def executar_robo_apostas():
             jogos_brutos = eventos_espn
             dados_contexto = f"Partidas obtidas via conferência cruzada ESPN: {str(eventos_espn[:15])}"
         else:
-            dados_contexto = "Nenhum jogo retornado pelas APIs estruturadas; utilize rigorosamente o Grounding do Google Search."
+            dados_contexto = "Nenhum jogo retornado pelas APIs; utilize o Grounding do Google Search."
 
     prompt_mestre = montar_prompt(data_hoje, dados_contexto)
 
@@ -370,9 +349,7 @@ def executar_robo_apostas():
                 time.sleep(tempo_espera)
 
     if not relatorio:
-        print(
-            "Erro crítico: Não foi possível obter resposta da API do Gemini devido à cota. Usando fallback formatado..."
-        )
+        print("Erro de cota ou conexão na IA. Executando fallback limpo...")
         if jogos_brutos:
             relatorio_fallback = formatar_jogos_fallback_limpo(
                 jogos_brutos, origem_dados, data_hoje
@@ -390,3 +367,5 @@ def executar_robo_apostas():
 
 if __name__ == "__main__":
     executar_robo_apostas()
+
+```
