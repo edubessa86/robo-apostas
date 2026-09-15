@@ -1,8 +1,3 @@
-Aqui está o código completo do `robo.py` corrigido para resolver a repetição de dados.
-
-A função de fallback agora **lê apenas os dados reais de cada partida** (Nome, Horário convertido para Brasília e Competição) e remove as estatísticas estáticas duplicadas.
-
-```python
 from datetime import datetime, timedelta
 import os
 import time
@@ -367,5 +362,3 @@ def executar_robo_apostas():
 
 if __name__ == "__main__":
     executar_robo_apostas()
-
-```
