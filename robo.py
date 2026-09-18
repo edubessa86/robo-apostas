@@ -13,7 +13,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
 
-MODELO = "gemini-2.5-flash"
+MODELO = "gemini-3.6-flash"
 
 def dividir_mensagem(texto, limite=4000):
     """Divide textos longos em pedaços menores para respeitar o limite do Telegram."""
