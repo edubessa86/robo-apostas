@@ -98,12 +98,25 @@ def buscar_jogos_espn():
         print(f"Erro ao consultar endpoint público da ESPN: {e}")
     return []
 
-def relatorio_fallback_limpo(data_hoje):
-    """Gera um relatório de segurança simplificado caso a IA atinja limite de cota."""
+def relatorio_fallback_limpo(data_hoje, motivo=None):
+    """Gera um relatório de segurança simplificado caso a IA falhe (cota, chave
+    inválida, modelo indisponível, erro de rede, etc.).
+
+    Antes esta mensagem sempre dizia "Cota Excedida" mesmo quando o erro real
+    era outro (ex.: chave inválida, nome de modelo errado). Agora, quando o
+    motivo é conhecido, ele aparece na própria mensagem do Telegram — assim dá
+    pra diagnosticar sem precisar abrir o log do GitHub Actions.
+    """
+    if motivo:
+        linha_motivo = f"⚠️ Detalhe técnico do erro: {motivo}"
+    else:
+        linha_motivo = (
+            "A inteligência artificial atingiu o limite gratuito de análises de hoje (Cota Excedida)."
+        )
     return f"""⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
 ━━━━━━━━━━━━━━━━━━
 ⚠️ <b>Aviso de Sistema:</b> 
-A inteligência artificial atingiu o limite gratuito de análises de hoje (Cota Excedida). 
+{linha_motivo}
 Os palpites detalhados e cruzamento de dados retornarão automaticamente amanhã!
 
 🏆 <b>Dica de Gestão de Banca:</b>
@@ -181,7 +194,10 @@ def executar_robo_apostas():
     prompt_mestre = montar_prompt(data_hoje, dados_contexto)
 
     relatorio = None
-    if GEMINI_API_KEY:
+    erro_capturado = None
+    if not GEMINI_API_KEY:
+        erro_capturado = "GEMINI_API_KEY não está definida (confira o Secret no GitHub)."
+    else:
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
@@ -192,10 +208,11 @@ def executar_robo_apostas():
             )
             relatorio = response.text
         except Exception as e:
+            erro_capturado = str(e)[:300]
             print(f"Erro na geração Gemini: {e}")
 
     if not relatorio:
-        relatorio = relatorio_fallback_limpo(data_hoje)
+        relatorio = relatorio_fallback_limpo(data_hoje, motivo=erro_capturado)
 
     enviar_telegram(relatorio)
 
