@@ -33,11 +33,10 @@ LIGAS_ELITE = {
 }
 
 N_FORMA = 8
-N_MINIMO = 5
-HISTORICO_DIAS = 60  # Reduzido para otimizar tempo de execução no GitHub Actions
+N_MINIMO = 4
+HISTORICO_DIAS = 45  # Otimizado para execução rápida no GitHub Actions
 DECAY = 0.88
 N_MIN_CASA_FORA = 3
-SHRINK = 0.20
 RHO = -0.08
 MAX_GOLS = 8
 
@@ -45,7 +44,6 @@ HTTP_TIMEOUT = 12
 RETRIES = 2
 BACKOFF = 0.5
 PAUSA_API = 0.05
-TELEGRAM_LIMIT = 3800
 
 SESSION = requests.Session()
 SESSION.headers.update({
@@ -132,8 +130,8 @@ def obter_historico_liga(league_code: str, fim: datetime, dias: int = HISTORICO_
     eventos: dict[str, dict] = {}
     inicio = fim - timedelta(days=dias)
     
-    # Consulta em blocos semanais/quinzenais para acelerar a requisicao
-    step = 7
+    # Consulta em blocos de 5 dias para acelerar a requisicao
+    step = 5
     for i in range(0, dias + 1, step):
         dia = inicio + timedelta(days=i)
         for ev in obter_jogos_do_dia(league_code, dia):
@@ -389,8 +387,6 @@ def projetar_partida(forma_casa: dict, forma_fora: dict, competencia: dict) -> d
         "gols": f"Over 1.5: {over_1_5*100:.1f}% | Over 2.5: {over_2_5*100:.1f}% | Over 3.5: {over_3_5*100:.1f}%",
         "btts": f"Sim: {btts*100:.1f}% | Não: {(1-btts)*100:.1f}%",
         "placar": placar_txt,
-        "escanteios": "N/D",
-        "cartoes": "N/D",
         "probabilidades": f"Casa {pc*100:.1f}% | Empate {pe*100:.1f}% | Fora {pf*100:.1f}%"
     }
 
@@ -413,8 +409,13 @@ def buscar_jogos_reais_do_dia() -> list[dict]:
                 continue
 
             hora, data_jogo = converter_hora_brasilia(ev.get("date", ""))
-            if data_jogo != dia_hoje:
-                continue
+            
+            # Validação flexível para capturar partidas no mesmo dia de Brasília
+            if data_jogo != dia_hoje and not partida_concluida(ev):
+                # Se não for idêntica à data local, verifica se a partida ainda está agendada para o dia atual
+                dt_evt = datetime.fromisoformat(ev.get("date", "").replace("Z", "+00:00")).astimezone(BRT)
+                if dt_evt.date() != hoje.date():
+                    continue
 
             casa, fora = obter_times(ev)
             if not casa or not fora:
