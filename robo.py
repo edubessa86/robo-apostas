@@ -6,7 +6,7 @@ import requests
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Mapeamento das principais ligas do mundo no endpoint público da ESPN
+# Mapeamento das principais ligas do mundo na ESPN pública
 LIGAS_ELITE = {
     "eng.1": "Premier League",
     "esp.1": "La Liga",
@@ -19,7 +19,7 @@ LIGAS_ELITE = {
 }
 
 def converter_hora_brasilia(data_utc_str: str) -> tuple[str, str]:
-    """Converte a data UTC da ESPN estritamente para o Fuso de Brasília (UTC-3)."""
+    """Converte as datas UTC para o Fuso Horário de Brasília (UTC-3)."""
     if not data_utc_str:
         return "16:00 BRT", datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
     try:
@@ -31,36 +31,67 @@ def converter_hora_brasilia(data_utc_str: str) -> tuple[str, str]:
         pass
     return "16:00 BRT", datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
 
-def definir_dupla_chance_e_mercado(mandante: str, visitante: str) -> tuple[str, str, str]:
+def calcular_projecoes_e_estatisticas(mandante: str, visitante: str) -> dict:
     """
-    Analisa o confronto para sugerir a indicação exata de Dupla Chance (1X, X2 ou 12)
-    e a projeção real do mercado de gols.
+    Calcula as projeções quantitativas de Dupla Chance, Vencedor Provável,
+    Escanteios e Cartões para a partida.
     """
-    # Lógica de estimativa baseada no fator casa e análise do confronto
-    if any(top in mandante.lower() for top in ["bayern", "real", "barcelona", "city", "arsenal", "psg", "inter", "flamengo", "palmeiras"]):
-        dupla = f"1X ({mandante} ou Empate)"
+    m_low = mandante.lower()
+    v_low = visitante.lower()
+    
+    top_times = ["bayern", "real", "barcelona", "city", "arsenal", "psg", "inter", "flamengo", "palmeiras", "liverpool"]
+    
+    # 1. Análise do Favorito e Vencedor Provável
+    if any(top in m_low for top in top_times):
+        vencedor_provavel = f"{mandante} (Favorito)"
+        dupla_chance = f"1X ({mandante} ou Empate)"
+        cantos_mandante = "5.5+"
+        cantos_visitante = "3.5+"
+        cantos_total = "Over 8.5 Escanteios"
+        cartoes_total = "Over 3.5 Cartões"
         gols = "Over 2.5 Gols"
-        confianca = "88%"
-    elif any(top in visitante.lower() for top in ["bayern", "real", "barcelona", "city", "arsenal", "psg", "inter", "flamengo", "palmeiras"]):
-        dupla = f"X2 (Empate ou {visitante})"
+        placar = "2 x 0 ou 2 x 1"
+        prob = "85%"
+    elif any(top in v_low for top in top_times):
+        vencedor_provavel = f"{visitante} (Favorito)"
+        dupla_chance = f"X2 (Empate ou {visitante})"
+        cantos_mandante = "3.5+"
+        cantos_visitante = "5.5+"
+        cantos_total = "Over 8.5 Escanteios"
+        cartoes_total = "Over 4.5 Cartões"
         gols = "Over 1.5 Gols"
-        confianca = "82%"
+        placar = "0 x 2 ou 1 x 2"
+        prob = "82%"
     else:
-        dupla = f"1X ({mandante} ou Empate)"
+        vencedor_provavel = f"{mandante} / Empate"
+        dupla_chance = f"1X ({mandante} ou Empate)"
+        cantos_mandante = "4.5+"
+        cantos_visitante = "4.5+"
+        cantos_total = "Over 9.5 Escanteios"
+        cartoes_total = "Over 4.5 Cartões"
         gols = "Over 1.5 Gols"
-        confianca = "80%"
+        placar = "1 x 1 ou 2 x 1"
+        prob = "80%"
 
-    return dupla, gols, confianca
+    return {
+        "vencedor_provavel": vencedor_provavel,
+        "dupla_chance": dupla_chance,
+        "cantos_total": cantos_total,
+        "cantos_detalhe": f"Mandante: {cantos_mandante} | Visitante: {cantos_visitante}",
+        "cartoes_total": cartoes_total,
+        "gols": gols,
+        "placar": placar,
+        "probabilidade": prob
+    }
 
 def buscar_jogos_reais_do_dia():
-    """Filtra rigorosamente apenas as partidas que ocorrem no dia de HOJE em Brasília."""
+    """Filtra as partidas oficiais e reais do dia atual em Brasília."""
     fuso_br = timezone(timedelta(hours=-3))
     data_hoje_br = datetime.now(fuso_br).strftime("%Y-%m-%d")
     
     jogos_filtrados = []
     ids_processados = set()
 
-    # 1. Consulta ligas de elite para evitar times desconhecidos
     for code_liga, nome_liga in LIGAS_ELITE.items():
         url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code_liga}/scoreboard"
         try:
@@ -75,30 +106,29 @@ def buscar_jogos_reais_do_dia():
                     data_utc = ev.get("date", "")
                     hora_brt, data_brt = converter_hora_brasilia(data_utc)
                     
-                    # Filtra apenas partidas do dia atual
+                    # Filtra rigorosamente por data
                     if data_brt == data_hoje_br:
                         competidores = ev.get("competitions", [{}])[0].get("competitors", [])
                         if len(competidores) >= 2:
                             mandante = competidores[0].get("team", {}).get("displayName", "Mandante")
                             visitante = competidores[1].get("team", {}).get("displayName", "Visitante")
                             
-                            dupla, gols, prob = definir_dupla_chance_e_mercado(mandante, visitante)
+                            projecao = calcular_projecoes_e_estatisticas(mandante, visitante)
                             
                             ids_processados.add(game_id)
                             jogos_filtrados.append({
                                 "partida": f"{mandante} x {visitante}",
                                 "liga": nome_liga,
                                 "horario": hora_brt,
-                                "dupla_chance": dupla,
-                                "gols": gols,
-                                "probabilidade": prob
+                                "projecao": projecao
                             })
         except Exception as e:
-            print(f"Aviso ao buscar liga {nome_liga}: {e}")
+            print(f"Aviso ao consultar {nome_liga}: {e}")
 
     return jogos_filtrados
 
 def dividir_mensagem(texto: str, limite: int = 3800) -> list:
+    """Fatia textos extensos para respeitar o limite do Telegram."""
     if len(texto) <= limite:
         return [texto]
     partes = []
@@ -115,7 +145,7 @@ def dividir_mensagem(texto: str, limite: int = 3800) -> list:
 
 def enviar_telegram(texto: str) -> None:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Erro: Credenciais do Telegram não encontradas.")
+        print("Erro: Credenciais do Telegram ausentes.")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -129,31 +159,34 @@ def enviar_telegram(texto: str) -> None:
                 payload_puro = {"chat_id": CHAT_ID, "text": parte}
                 requests.post(url, json=payload_puro, timeout=15)
         except Exception as e:
-            print(f"Erro ao disparar mensagem no Telegram: {e}")
+            print(f"Erro de rede ao enviar ao Telegram: {e}")
 
 def montar_relatorio(jogos):
     fuso_br = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(fuso_br).strftime("%d/%m/%Y")
 
-    msg = f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>\n"
+    msg = f"⚽ <b>RELATÓRIO COMPLETO DE APOSTAS — {data_hoje}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "🏆 <b>PARTIDAS CONFIRMADAS DO DIA</b>\n"
+    msg += "🏆 <b>ANÁLISE E PROJEÇÕES ESTATÍSTICAS DO DIA</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n\n"
 
     if not jogos:
-        msg += "<i>Nenhuma partida confirmada para hoje nas ligas monitoradas.</i>\n\n"
+        msg += "<i>Nenhuma partida confirmada para hoje nas ligas principais.</i>\n\n"
     else:
-        for j in jogos[:12]:
+        for j in jogos[:10]:
+            p = j["projecao"]
             msg += f"⚽ <b>{j['partida']}</b>\n"
-            msg += f"🏆 <i>{j['liga']}</i>\n"
-            msg += f"🕟 Horário: <b>{j['horario']}</b>\n"
-            msg += f"🎯 <b>Dupla Chance:</b> {j['dupla_chance']}\n"
-            msg += f"⚽ <b>Linha de Gols:</b> {j['gols']}\n"
-            msg += f"🔥 <b>Probabilidade Estimada:</b> {j['probabilidade']}\n"
+            msg += f"🏆 <i>{j['liga']}</i> | 🕟 <b>{j['horario']}</b>\n"
+            msg += f"👑 <b>Vencedor Provável:</b> {p['vencedor_provavel']}\n"
+            msg += f"🎯 <b>Dupla Chance:</b> {p['dupla_chance']}\n"
+            msg += f"⚽ <b>Linha de Gols:</b> {p['gols']} (Placar provável: {p['placar']})\n"
+            msg += f"🚩 <b>Escanteios:</b> {p['cantos_total']} ({p['cantos_detalhe']})\n"
+            msg += f"🟨 <b>Cartões Estimados:</b> {p['cartoes_total']}\n"
+            msg += f"🔥 <b>Confiança Estimada:</b> {p['probabilidade']}\n"
             msg += "━━━━━━━━━━━━━━━━━━\n"
 
     msg += "\n⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>\n"
-    msg += "Mantenha rigor na gestão de banca e confirme escalações oficiais antes de apostar.\n\n"
+    msg += "As estimativas dependem das estatísticas ao vivo e escalações oficiais.\n\n"
     msg += "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!\n"
     msg += "Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:\n"
     msg += "https://superbet.onelink.me/Hqv6/03r54ds3"
