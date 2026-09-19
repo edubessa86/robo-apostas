@@ -8,8 +8,14 @@ cartões apenas checando se o NOME do time estava numa lista fixa
 fixa (85%/82%/80%) sempre iguais, sem olhar nenhum dado da partida.
 
 Esta versão busca a forma recente real de cada time (últimos N jogos) na
-API pública da ESPN — gols marcados/sofridos e, quando disponível,
-escanteios e cartões — e usa um modelo de Poisson (método estatístico
+API pública da ESPN, usando o endpoint de scoreboard por intervalo de
+datas (dates=YYYYMMDD-YYYYMMDD) — o mesmo caminho que já funciona
+corretamente para achar as partidas do dia. Isso substitui a tentativa
+anterior de usar o endpoint /teams/{id}/schedule, que na prática devolve
+só uma janela curta de jogos (passados e futuros misturados) e não um
+histórico confiável. A partir do histórico real — gols marcados/sofridos
+e, quando disponível, escanteios e cartões — usamos um modelo de Poisson
+(método estatístico
 padrão em análise de futebol) para estimar probabilidades. Não existe
 "robô de apostas" público com taxa de acerto de ~80% comprovada e
 auditada — mercados de apostas são precificados de forma eficiente, e
@@ -48,6 +54,7 @@ LIGAS_ELITE = {
 }
 
 JOGOS_PARA_ANALISAR_FORMA = 5  # quantos jogos recentes usar por time
+JANELA_HISTORICO_DIAS = 45     # quantos dias para trás buscar no scoreboard
 PAUSA_ENTRE_REQUISICOES = 0.15  # segundos, para não sobrecarregar a API pública
 
 
@@ -143,9 +150,47 @@ def obter_escanteios_cartoes(league_code: str, event_id: str, team_id: str):
     return None, None
 
 
-def obter_forma_recente(league_code: str, team_id: str, cache: dict, n: int = JOGOS_PARA_ANALISAR_FORMA) -> dict:
-    """Busca os últimos N jogos concluídos do time e calcula médias reais de
-    gols marcados/sofridos e, quando a API fornecer, escanteios e cartões."""
+def _partida_concluida(ev: dict) -> bool:
+    """Verifica se a partida já terminou. A API da ESPN normalmente expõe
+    isso em competitions[0].status.type.state == 'post' (e às vezes também
+    no nível do evento) — checamos os dois lugares por segurança."""
+    comp = ev.get("competitions", [{}])[0]
+    for status in (comp.get("status", {}), ev.get("status", {})):
+        estado = status.get("type", {}).get("state")
+        if estado:
+            return estado == "post"
+    return False
+
+
+def obter_historico_liga(league_code: str, dias: int = JANELA_HISTORICO_DIAS) -> list:
+    """Busca, em UMA única chamada, todos os jogos de uma liga nos últimos
+    `dias` dias (incluindo hoje) usando o endpoint de scoreboard por
+    intervalo de datas — o mesmo que já comprovadamente funciona para achar
+    as partidas do dia. Isso evita depender do endpoint /schedule, que na
+    prática devolve só uma janela curta de jogos (passados e futuros
+    misturados), não o histórico real do time."""
+    fuso_br = timezone(timedelta(hours=-3))
+    hoje = datetime.now(fuso_br)
+    fim = hoje.strftime("%Y%m%d")
+    inicio = (hoje - timedelta(days=dias)).strftime("%Y%m%d")
+
+    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/scoreboard"
+    try:
+        resp = requests.get(url, params={"dates": f"{inicio}-{fim}"}, timeout=15)
+        if resp.status_code != 200:
+            print(f"Aviso: scoreboard histórico de {league_code} retornou HTTP {resp.status_code}")
+            return []
+        return resp.json().get("events", [])
+    except Exception as e:
+        print(f"Aviso: falha ao buscar histórico de {league_code}: {e}")
+        return []
+
+
+def obter_forma_recente(league_code: str, team_id: str, historico_liga: list, cache: dict,
+                         n: int = JOGOS_PARA_ANALISAR_FORMA) -> dict:
+    """Filtra, a partir do histórico já baixado da liga, os últimos N jogos
+    CONCLUÍDOS de um time e calcula médias reais de gols marcados/sofridos
+    e, quando a API fornecer, escanteios e cartões."""
     if team_id in cache:
         return cache[team_id]
 
@@ -157,25 +202,19 @@ def obter_forma_recente(league_code: str, team_id: str, cache: dict, n: int = JO
         "cartoes": [],
     }
 
-    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/teams/{team_id}/schedule"
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            cache[team_id] = resultado
-            return resultado
-        eventos = resp.json().get("events", [])
-    except Exception as e:
-        print(f"Aviso: falha ao buscar calendário do time {team_id}: {e}")
-        cache[team_id] = resultado
-        return resultado
+    jogos_do_time = []
+    for ev in historico_liga:
+        if not _partida_concluida(ev):
+            continue
+        comp = ev.get("competitions", [{}])[0]
+        competidores = comp.get("competitors", [])
+        if not any(str(c.get("team", {}).get("id")) == str(team_id) for c in competidores):
+            continue
+        jogos_do_time.append(ev)
 
-    concluidos = [
-        ev for ev in eventos
-        if ev.get("competitions", [{}])[0].get("status", {}).get("type", {}).get("completed")
-    ]
-    concluidos.sort(key=lambda ev: ev.get("date", ""), reverse=True)
+    jogos_do_time.sort(key=lambda ev: ev.get("date", ""), reverse=True)
 
-    for ev in concluidos[:n]:
+    for ev in jogos_do_time[:n]:
         comp = ev.get("competitions", [{}])[0]
         competidores = comp.get("competitors", [])
         time_alvo = next((c for c in competidores if str(c.get("team", {}).get("id")) == str(team_id)), None)
@@ -183,8 +222,8 @@ def obter_forma_recente(league_code: str, team_id: str, cache: dict, n: int = JO
         if not time_alvo or not adversario:
             continue
         try:
-            gm = int(time_alvo.get("score", 0))
-            gs = int(adversario.get("score", 0))
+            gm = int(float(time_alvo.get("score", 0)))
+            gs = int(float(adversario.get("score", 0)))
         except (TypeError, ValueError):
             continue
 
@@ -202,6 +241,14 @@ def obter_forma_recente(league_code: str, team_id: str, cache: dict, n: int = JO
                 resultado["cartoes"].append(crt)
 
     cache[team_id] = resultado
+
+    if resultado["jogos_analisados"] == 0:
+        print(
+            f"Aviso: nenhum jogo concluído encontrado para o time {team_id} "
+            f"na liga {league_code} nos últimos {JANELA_HISTORICO_DIAS} dias. "
+            "Verifique se a API mudou de formato (rode diagnostico_forma.py)."
+        )
+
     return resultado
 
 
@@ -223,6 +270,7 @@ def projetar_partida(forma_mandante: dict, forma_visitante: dict) -> dict:
             "cartoes": "N/D",
             "probabilidade_modelo": "N/D",
             "amostra": f"{jogos_m} jogos (mandante) / {jogos_v} jogos (visitante)",
+            "dados_suficientes": False,
         }
 
     media_gm_marcados = media(forma_mandante["gols_marcados"], 1.0)
@@ -268,6 +316,7 @@ def projetar_partida(forma_mandante: dict, forma_visitante: dict) -> dict:
         "cartoes": cartoes,
         "probabilidade_modelo": f"Casa {prob_casa*100:.0f}% | Empate {prob_empate*100:.0f}% | Fora {prob_fora*100:.0f}%",
         "amostra": f"{jogos_m} jogos (mandante) / {jogos_v} jogos (visitante)",
+        "dados_suficientes": True,
     }
 
 
@@ -286,14 +335,10 @@ def buscar_jogos_reais_do_dia():
     cache_forma = {}  # evita buscar a forma do mesmo time mais de uma vez
 
     for code_liga, nome_liga in LIGAS_ELITE.items():
-        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code_liga}/scoreboard"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code != 200:
-                continue
-            eventos = resp.json().get("events", [])
-        except Exception as e:
-            print(f"Aviso ao consultar {nome_liga}: {e}")
+        # Uma única chamada traz o intervalo (histórico + hoje) da liga inteira.
+        eventos = obter_historico_liga(code_liga)
+        if not eventos:
+            print(f"Aviso: nenhum evento retornado para {nome_liga} ({code_liga}) no intervalo buscado.")
             continue
 
         for ev in eventos:
@@ -326,8 +371,8 @@ def buscar_jogos_reais_do_dia():
             if not mandante_id or not visitante_id:
                 continue
 
-            forma_mandante = obter_forma_recente(code_liga, mandante_id, cache_forma)
-            forma_visitante = obter_forma_recente(code_liga, visitante_id, cache_forma)
+            forma_mandante = obter_forma_recente(code_liga, mandante_id, eventos, cache_forma)
+            forma_visitante = obter_forma_recente(code_liga, visitante_id, eventos, cache_forma)
             projecao = projetar_partida(forma_mandante, forma_visitante)
 
             ids_processados.add(game_id)
@@ -419,8 +464,12 @@ def montar_relatorio(jogos):
 
 def main():
     jogos = buscar_jogos_reais_do_dia()
+
+    sem_dados = sum(1 for j in jogos if not j["projecao"]["dados_suficientes"])
+    print(f"Resumo da execução: {len(jogos)} partidas encontradas, {sem_dados} sem forma recente suficiente.")
+
     relatorio = montar_relatorio(jogos)
-    print(relatorio)  # útil para depuração local antes de enviar
+    print(relatorio)  # útil para depuração local e para os logs da execução agendada
     enviar_telegram(relatorio)
 
 
