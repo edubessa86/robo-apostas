@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V2.3 (ENDPOINTS GLOBAIS)
+RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V2.4 (FEED GLOBAL BRT)
 """
 
 from __future__ import annotations
@@ -18,14 +18,8 @@ import requests
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+# Fuso horário de Brasília (UTC-3)
 BRT = timezone(timedelta(hours=-3))
-
-# Termos para identificar as ligas no retorno da API global da ESPN
-LIGAS_ALVO = [
-    "brasileirão", "premier league", "championship", "la liga", 
-    "serie a", "bundesliga", "ligue 1", "champions league", 
-    "liga portugal", "mls"
-]
 
 HTTP_TIMEOUT = 12
 RETRIES = 3
@@ -33,7 +27,7 @@ BACKOFF = 0.5
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FootballBot/2.3"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FootballBot/2.4"
 })
 
 
@@ -78,8 +72,8 @@ def poisson_pmf(k: int, lam: float) -> float:
 
 
 def projetar_partida() -> dict:
-    # Modelo Poisson estimado para cálculo de probabilidades
-    lc, lf = 1.40, 1.15
+    # Modelo estatístico Poisson
+    lc, lf = 1.45, 1.10
     
     matriz = []
     for i in range(7):
@@ -123,16 +117,16 @@ def buscar_todos_os_jogos() -> list[dict]:
     hoje = agora_brt()
     dia_hoje_brt = data_brt(hoje)
     
-    # Endpoint global irrestrito da ESPN
+    # Endpoint global unificado
     url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
     
     jogos = []
     ids_vistos = set()
 
-    # Varre datas em UTC (-1, 0, +1) para capturar fusos horários locais no Brasil
+    # Consulta um intervalo amplo em UTC (-1, 0, +1 dia) para garantir cobertura do fuso de Brasília
     for delta in (-1, 0, 1):
         dt_busca = (hoje + timedelta(days=delta)).strftime("%Y%m%d")
-        dados = get_json(url, {"dates": dt_busca, "limit": 500})
+        dados = get_json(url, {"dates": dt_busca, "limit": 1000})
         if not dados:
             continue
 
@@ -144,32 +138,28 @@ def buscar_todos_os_jogos() -> list[dict]:
 
             hora_brt, dia_jogo_brt = converter_hora_brt(ev.get("date", ""))
             
-            # Garante que a partida ocorra no dia de hoje do fuso de Brasília
+            # Valida estritamente se o jogo cai no dia de HOJE no fuso do Brasil
             if dia_jogo_brt != dia_hoje_brt:
                 continue
 
-            # Nome da liga/torneio
-            liga_nome = "Futebol Internacional"
             comps = ev.get("competitions", [])
-            if comps:
-                liga_info = comps[0].get("league", {}) or ev.get("league", {})
-                liga_nome = liga_info.get("name") or liga_info.get("midsizeName") or liga_nome
-
-            # Filtra apenas ligas relevantes se desejado, ou aceita todas se a lista for ampla
-            liga_lower = liga_nome.lower()
-            if LIGAS_ALVO and not any(alvo in liga_lower for alvo in LIGAS_ALVO):
+            if not comps:
                 continue
 
-            # Extração dos times
-            competidores = comps[0].get("competitors", []) if comps else []
+            # Extração da Liga/Campeonato
+            liga_info = comps[0].get("league", {}) or ev.get("league", {})
+            liga_nome = liga_info.get("name") or liga_info.get("midsizeName") or "Futebol Internacional"
+
+            # Extração dos Times
+            competidores = comps[0].get("competitors", [])
             if len(competidores) < 2:
                 continue
 
             casa = next((c for c in competidores if c.get("homeAway") == "home"), competidores[0])
             fora = next((c for c in competidores if c.get("homeAway") == "away"), competidores[1])
 
-            nome_casa = casa.get("team", {}).get("displayName", "Mandante")
-            nome_fora = fora.get("team", {}).get("displayName", "Visitante")
+            nome_casa = casa.get("team", {}).get("displayName") or casa.get("team", {}).get("name", "Mandante")
+            nome_fora = fora.get("team", {}).get("displayName") or fora.get("team", {}).get("name", "Visitante")
 
             ids_vistos.add(ev_id)
             jogos.append({
@@ -221,11 +211,11 @@ def montar_relatorio(jogos: list[dict]) -> str:
 
 def enviar_telegram(texto: str) -> None:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[TELEGRAM] Credenciais ausentes.")
+        print("[TELEGRAM] Credenciais não encontradas nas variáveis de ambiente.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # Divide a mensagem se ultrapassar o limite do Telegram (4000 caracteres)
+    # Divide mensagens grandes para evitar estouro do limite do Telegram (4096 chars)
     partes = [texto[i:i+3900] for i in range(0, len(texto), 3900)]
     
     for parte in partes:
@@ -237,10 +227,10 @@ def enviar_telegram(texto: str) -> None:
 
 
 def main() -> None:
-    print("Iniciando Relatório V2.3 (API Global da ESPN)...")
+    print("Iniciando Relatório V2.4 (Feed Global Unificado)...")
     try:
         jogos = buscar_todos_os_jogos()
-        print(f"Jogos capturados: {len(jogos)}")
+        print(f"Jogos reais capturados para hoje: {len(jogos)}")
         relatorio = montar_relatorio(jogos)
         print(relatorio)
         enviar_telegram(relatorio)
