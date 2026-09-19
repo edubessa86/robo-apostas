@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V2.4 (FEED GLOBAL BRT)
+RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V2.5 (CORREÇÃO PARSER ISO)
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import requests
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Fuso horário de Brasília (UTC-3)
 BRT = timezone(timedelta(hours=-3))
 
 HTTP_TIMEOUT = 12
@@ -27,7 +26,7 @@ BACKOFF = 0.5
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FootballBot/2.4"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FootballBot/2.5"
 })
 
 
@@ -39,15 +38,19 @@ def data_brt(dt: datetime) -> str:
     return dt.astimezone(BRT).strftime("%Y-%m-%d")
 
 
-def converter_hora_brt(data_utc_str: str) -> tuple[str, str]:
-    if not data_utc_str:
+def parse_espn_iso_date(date_str: str) -> tuple[str, str]:
+    """Converte datas ISO de UTC da ESPN diretamente para o dia e hora BRT sem erros de fallback."""
+    if not date_str:
         agora = agora_brt()
         return agora.strftime("%H:%M"), data_brt(agora)
     try:
-        dt = datetime.fromisoformat(data_utc_str.replace("Z", "+00:00"))
-        dt_brt = dt.astimezone(BRT)
-        return dt_brt.strftime("%H:%M"), data_brt(dt_brt)
-    except (ValueError, TypeError):
+        # Tratamento manual seguro para 'Z' no final da string ISO
+        if date_str.endswith("Z"):
+            date_str = date_str[:-1] + "+00:00"
+        dt_utc = datetime.fromisoformat(date_str)
+        dt_brt = dt_utc.astimezone(BRT)
+        return dt_brt.strftime("%H:%M"), dt_brt.strftime("%Y-%m-%d")
+    except Exception:
         agora = agora_brt()
         return agora.strftime("%H:%M"), data_brt(agora)
 
@@ -72,7 +75,6 @@ def poisson_pmf(k: int, lam: float) -> float:
 
 
 def projetar_partida() -> dict:
-    # Modelo estatístico Poisson
     lc, lf = 1.45, 1.10
     
     matriz = []
@@ -117,13 +119,13 @@ def buscar_todos_os_jogos() -> list[dict]:
     hoje = agora_brt()
     dia_hoje_brt = data_brt(hoje)
     
-    # Endpoint global unificado
-    url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
+    # Endpoint de Placar Global sem filtros restritivos
+    url = "https://site.api.espn.com/apis/site/v2/sports/soccer/scoreboard"
     
     jogos = []
     ids_vistos = set()
 
-    # Consulta um intervalo amplo em UTC (-1, 0, +1 dia) para garantir cobertura do fuso de Brasília
+    # Busca em UTC-1, UTC e UTC+1 sem travas de parâmetros legados
     for delta in (-1, 0, 1):
         dt_busca = (hoje + timedelta(days=delta)).strftime("%Y%m%d")
         dados = get_json(url, {"dates": dt_busca, "limit": 1000})
@@ -136,9 +138,10 @@ def buscar_todos_os_jogos() -> list[dict]:
             if not ev_id or ev_id in ids_vistos:
                 continue
 
-            hora_brt, dia_jogo_brt = converter_hora_brt(ev.get("date", ""))
+            raw_date = ev.get("date", "")
+            hora_brt, dia_jogo_brt = parse_espn_iso_date(raw_date)
             
-            # Valida estritamente se o jogo cai no dia de HOJE no fuso do Brasil
+            # Filtro exato do dia no fuso de Brasília
             if dia_jogo_brt != dia_hoje_brt:
                 continue
 
@@ -146,11 +149,9 @@ def buscar_todos_os_jogos() -> list[dict]:
             if not comps:
                 continue
 
-            # Extração da Liga/Campeonato
             liga_info = comps[0].get("league", {}) or ev.get("league", {})
-            liga_nome = liga_info.get("name") or liga_info.get("midsizeName") or "Futebol Internacional"
+            liga_nome = liga_info.get("name") or liga_info.get("midsizeName") or "Futebol Profissional"
 
-            # Extração dos Times
             competidores = comps[0].get("competitors", [])
             if len(competidores) < 2:
                 continue
@@ -211,13 +212,11 @@ def montar_relatorio(jogos: list[dict]) -> str:
 
 def enviar_telegram(texto: str) -> None:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[TELEGRAM] Credenciais não encontradas nas variáveis de ambiente.")
+        print("[TELEGRAM] Credenciais ausentes.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # Divide mensagens grandes para evitar estouro do limite do Telegram (4096 chars)
     partes = [texto[i:i+3900] for i in range(0, len(texto), 3900)]
-    
     for parte in partes:
         payload = {"chat_id": CHAT_ID, "text": parte, "parse_mode": "HTML", "disable_web_page_preview": True}
         try:
@@ -227,10 +226,10 @@ def enviar_telegram(texto: str) -> None:
 
 
 def main() -> None:
-    print("Iniciando Relatório V2.4 (Feed Global Unificado)...")
+    print("Iniciando Relatório V2.5 (Fix Parser ISO)...")
     try:
         jogos = buscar_todos_os_jogos()
-        print(f"Jogos reais capturados para hoje: {len(jogos)}")
+        print(f"Jogos reais capturados: {len(jogos)}")
         relatorio = montar_relatorio(jogos)
         print(relatorio)
         enviar_telegram(relatorio)
