@@ -1,5 +1,34 @@
+"""
+Relatório diário de projeções para futebol — versão baseada em dados reais.
+
+DIFERENÇA EM RELAÇÃO À VERSÃO ANTERIOR:
+A versão anterior decidia "Vencedor Provável", linha de gols, escanteios e
+cartões apenas checando se o NOME do time estava numa lista fixa
+(["bayern", "real", "flamengo", ...]) e devolvia textos e uma "confiança"
+fixa (85%/82%/80%) sempre iguais, sem olhar nenhum dado da partida.
+
+Esta versão busca a forma recente real de cada time (últimos N jogos) na
+API pública da ESPN — gols marcados/sofridos e, quando disponível,
+escanteios e cartões — e usa um modelo de Poisson (método estatístico
+padrão em análise de futebol) para estimar probabilidades. Não existe
+"robô de apostas" público com taxa de acerto de ~80% comprovada e
+auditada — mercados de apostas são precificados de forma eficiente, e
+apostadores profissionais trabalham com margens de poucos pontos
+percentuais, não 80%. Por isso este script NUNCA inventa um número de
+confiança: quando os dados reais não são suficientes, ele diz isso
+explicitamente em vez de preencher com um valor fixo.
+
+LIMITAÇÃO IMPORTANTE: a API pública da ESPN nem sempre expõe estatísticas
+de escanteios e cartões por partida, dependendo da liga. Quando isso
+acontece, o relatório informa "dados indisponíveis" em vez de arriscar um
+número sem base.
+"""
+
 from datetime import datetime, timedelta, timezone
+import math
 import os
+import time
+
 import requests
 
 # Variáveis de Ambiente do Telegram
@@ -15,117 +44,306 @@ LIGAS_ELITE = {
     "fra.1": "Ligue 1",
     "uefa.champions": "Champions League",
     "bra.1": "Brasileirão Serie A",
-    "usa.1": "MLS"
+    "usa.1": "MLS",
 }
+
+JOGOS_PARA_ANALISAR_FORMA = 5  # quantos jogos recentes usar por time
+PAUSA_ENTRE_REQUISICOES = 0.15  # segundos, para não sobrecarregar a API pública
+
+
+# ---------------------------------------------------------------------------
+# Utilidades de data/hora
+# ---------------------------------------------------------------------------
 
 def converter_hora_brasilia(data_utc_str: str) -> tuple[str, str]:
     """Converte as datas UTC para o Fuso Horário de Brasília (UTC-3)."""
     if not data_utc_str:
         return "16:00 BRT", datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
     try:
-        if 'T' in data_utc_str:
-            dt_utc = datetime.fromisoformat(data_utc_str.replace('Z', '+00:00'))
+        if "T" in data_utc_str:
+            dt_utc = datetime.fromisoformat(data_utc_str.replace("Z", "+00:00"))
             dt_brt = dt_utc.astimezone(timezone(timedelta(hours=-3)))
             return dt_brt.strftime("%H:%M BRT"), dt_brt.strftime("%Y-%m-%d")
     except Exception:
         pass
     return "16:00 BRT", datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
 
-def calcular_projecoes_e_estatisticas(mandante: str, visitante: str) -> dict:
-    """
-    Calcula as projeções quantitativas de Dupla Chance, Vencedor Provável,
-    Escanteios e Cartões para a partida.
-    """
-    m_low = mandante.lower()
-    v_low = visitante.lower()
-    
-    top_times = ["bayern", "real", "barcelona", "city", "arsenal", "psg", "inter", "flamengo", "palmeiras", "liverpool"]
-    
-    # 1. Análise do Favorito e Vencedor Provável
-    if any(top in m_low for top in top_times):
-        vencedor_provavel = f"{mandante} (Favorito)"
-        dupla_chance = f"1X ({mandante} ou Empate)"
-        cantos_mandante = "5.5+"
-        cantos_visitante = "3.5+"
-        cantos_total = "Over 8.5 Escanteios"
-        cartoes_total = "Over 3.5 Cartões"
-        gols = "Over 2.5 Gols"
-        placar = "2 x 0 ou 2 x 1"
-        prob = "85%"
-    elif any(top in v_low for top in top_times):
-        vencedor_provavel = f"{visitante} (Favorito)"
-        dupla_chance = f"X2 (Empate ou {visitante})"
-        cantos_mandante = "3.5+"
-        cantos_visitante = "5.5+"
-        cantos_total = "Over 8.5 Escanteios"
-        cartoes_total = "Over 4.5 Cartões"
-        gols = "Over 1.5 Gols"
-        placar = "0 x 2 ou 1 x 2"
-        prob = "82%"
-    else:
-        vencedor_provavel = f"{mandante} / Empate"
-        dupla_chance = f"1X ({mandante} ou Empate)"
-        cantos_mandante = "4.5+"
-        cantos_visitante = "4.5+"
-        cantos_total = "Over 9.5 Escanteios"
-        cartoes_total = "Over 4.5 Cartões"
-        gols = "Over 1.5 Gols"
-        placar = "1 x 1 ou 2 x 1"
-        prob = "80%"
 
-    return {
-        "vencedor_provavel": vencedor_provavel,
-        "dupla_chance": dupla_chance,
-        "cantos_total": cantos_total,
-        "cantos_detalhe": f"Mandante: {cantos_mandante} | Visitante: {cantos_visitante}",
-        "cartoes_total": cartoes_total,
-        "gols": gols,
-        "placar": placar,
-        "probabilidade": prob
+# ---------------------------------------------------------------------------
+# Modelo estatístico (Poisson) — substitui os percentuais fixos inventados
+# ---------------------------------------------------------------------------
+
+def poisson_pmf(k: int, lam: float) -> float:
+    if lam <= 0:
+        lam = 0.05  # evita lambda zero/negativo em times sem gols na amostra
+    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+
+def prob_resultado(lambda_casa: float, lambda_fora: float, max_gols: int = 6):
+    """Probabilidade de vitória do mandante / empate / vitória do visitante,
+    assumindo gols de cada time como variáveis de Poisson independentes
+    (modelo simplificado, o mesmo princípio usado em análises acadêmicas de
+    futebol — não é garantia de resultado, é uma estimativa)."""
+    prob_casa = prob_empate = prob_fora = 0.0
+    for i in range(max_gols + 1):
+        for j in range(max_gols + 1):
+            p = poisson_pmf(i, lambda_casa) * poisson_pmf(j, lambda_fora)
+            if i > j:
+                prob_casa += p
+            elif i == j:
+                prob_empate += p
+            else:
+                prob_fora += p
+    return prob_casa, prob_empate, prob_fora
+
+
+def media(lista, padrao=None):
+    return sum(lista) / len(lista) if lista else padrao
+
+
+# ---------------------------------------------------------------------------
+# Busca de forma recente real dos times na API pública da ESPN
+# ---------------------------------------------------------------------------
+
+def obter_escanteios_cartoes(league_code: str, event_id: str, team_id: str):
+    """Tenta extrair escanteios e cartões (amarelo+vermelho) do boxscore da
+    partida. Retorna (None, None) quando a API pública não disponibiliza
+    esse dado para a liga/partida — o valor NÃO é inventado."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary"
+    try:
+        resp = requests.get(url, params={"event": event_id}, timeout=10)
+        if resp.status_code != 200:
+            return None, None
+        dados = resp.json()
+    except Exception:
+        return None, None
+
+    times_boxscore = dados.get("boxscore", {}).get("teams", [])
+    for time_bx in times_boxscore:
+        if str(time_bx.get("team", {}).get("id")) != str(team_id):
+            continue
+        escanteios = None
+        cartoes = 0.0
+        cartao_encontrado = False
+        for stat in time_bx.get("statistics", []):
+            chave = (stat.get("name") or stat.get("abbreviation") or "").lower()
+            valor = stat.get("displayValue")
+            if valor is None:
+                continue
+            try:
+                valor_num = float(str(valor).replace(",", "."))
+            except ValueError:
+                continue
+            if "corner" in chave:
+                escanteios = valor_num
+            elif "yellow" in chave or "red" in chave or "card" in chave:
+                cartoes += valor_num
+                cartao_encontrado = True
+        return escanteios, (cartoes if cartao_encontrado else None)
+    return None, None
+
+
+def obter_forma_recente(league_code: str, team_id: str, cache: dict, n: int = JOGOS_PARA_ANALISAR_FORMA) -> dict:
+    """Busca os últimos N jogos concluídos do time e calcula médias reais de
+    gols marcados/sofridos e, quando a API fornecer, escanteios e cartões."""
+    if team_id in cache:
+        return cache[team_id]
+
+    resultado = {
+        "jogos_analisados": 0,
+        "gols_marcados": [],
+        "gols_sofridos": [],
+        "escanteios": [],
+        "cartoes": [],
     }
 
+    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/teams/{team_id}/schedule"
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            cache[team_id] = resultado
+            return resultado
+        eventos = resp.json().get("events", [])
+    except Exception as e:
+        print(f"Aviso: falha ao buscar calendário do time {team_id}: {e}")
+        cache[team_id] = resultado
+        return resultado
+
+    concluidos = [
+        ev for ev in eventos
+        if ev.get("competitions", [{}])[0].get("status", {}).get("type", {}).get("completed")
+    ]
+    concluidos.sort(key=lambda ev: ev.get("date", ""), reverse=True)
+
+    for ev in concluidos[:n]:
+        comp = ev.get("competitions", [{}])[0]
+        competidores = comp.get("competitors", [])
+        time_alvo = next((c for c in competidores if str(c.get("team", {}).get("id")) == str(team_id)), None)
+        adversario = next((c for c in competidores if str(c.get("team", {}).get("id")) != str(team_id)), None)
+        if not time_alvo or not adversario:
+            continue
+        try:
+            gm = int(time_alvo.get("score", 0))
+            gs = int(adversario.get("score", 0))
+        except (TypeError, ValueError):
+            continue
+
+        resultado["gols_marcados"].append(gm)
+        resultado["gols_sofridos"].append(gs)
+        resultado["jogos_analisados"] += 1
+
+        event_id = ev.get("id")
+        if event_id:
+            time.sleep(PAUSA_ENTRE_REQUISICOES)
+            esc, crt = obter_escanteios_cartoes(league_code, event_id, team_id)
+            if esc is not None:
+                resultado["escanteios"].append(esc)
+            if crt is not None:
+                resultado["cartoes"].append(crt)
+
+    cache[team_id] = resultado
+    return resultado
+
+
+# ---------------------------------------------------------------------------
+# Projeção da partida a partir de dados reais
+# ---------------------------------------------------------------------------
+
+def projetar_partida(forma_mandante: dict, forma_visitante: dict) -> dict:
+    jogos_m = forma_mandante["jogos_analisados"]
+    jogos_v = forma_visitante["jogos_analisados"]
+
+    if jogos_m == 0 or jogos_v == 0:
+        return {
+            "vencedor_provavel": "Dados insuficientes (sem jogos recentes na API)",
+            "dupla_chance": "N/D",
+            "gols": "N/D",
+            "placar_esperado": "N/D",
+            "escanteios": "N/D",
+            "cartoes": "N/D",
+            "probabilidade_modelo": "N/D",
+            "amostra": f"{jogos_m} jogos (mandante) / {jogos_v} jogos (visitante)",
+        }
+
+    media_gm_marcados = media(forma_mandante["gols_marcados"], 1.0)
+    media_gm_sofridos = media(forma_mandante["gols_sofridos"], 1.0)
+    media_gv_marcados = media(forma_visitante["gols_marcados"], 1.0)
+    media_gv_sofridos = media(forma_visitante["gols_sofridos"], 1.0)
+
+    # Gols esperados = média de ataque do time combinada com média de defesa do adversário
+    lambda_casa = (media_gm_marcados + media_gv_sofridos) / 2
+    lambda_fora = (media_gv_marcados + media_gm_sofridos) / 2
+
+    prob_casa, prob_empate, prob_fora = prob_resultado(lambda_casa, lambda_fora)
+
+    if prob_casa >= prob_fora:
+        vencedor = f"Mandante — modelo estima {prob_casa * 100:.0f}%"
+        dupla_chance = f"1X (Mandante ou Empate) — modelo estima {(prob_casa + prob_empate) * 100:.0f}%"
+    else:
+        vencedor = f"Visitante — modelo estima {prob_fora * 100:.0f}%"
+        dupla_chance = f"X2 (Empate ou Visitante) — modelo estima {(prob_fora + prob_empate) * 100:.0f}%"
+
+    gols_esperados_total = lambda_casa + lambda_fora
+    linha_gols = f"Over {max(gols_esperados_total - 0.5, 0.5):.1f} Gols (esperado pelo modelo: {gols_esperados_total:.1f})"
+    placar_esperado = f"{round(lambda_casa)} x {round(lambda_fora)} (aprox., baseado na média recente)"
+
+    if forma_mandante["escanteios"] and forma_visitante["escanteios"]:
+        esc_total = media(forma_mandante["escanteios"]) + media(forma_visitante["escanteios"])
+        escanteios = f"Over {max(esc_total - 0.5, 0.5):.1f} Escanteios (média recente combinada: {esc_total:.1f})"
+    else:
+        escanteios = "Dados de escanteios indisponíveis na API pública para esta liga"
+
+    if forma_mandante["cartoes"] and forma_visitante["cartoes"]:
+        cart_total = media(forma_mandante["cartoes"]) + media(forma_visitante["cartoes"])
+        cartoes = f"Over {max(cart_total - 0.5, 0.5):.1f} Cartões (média recente combinada: {cart_total:.1f})"
+    else:
+        cartoes = "Dados de cartões indisponíveis na API pública para esta liga"
+
+    return {
+        "vencedor_provavel": vencedor,
+        "dupla_chance": dupla_chance,
+        "gols": linha_gols,
+        "placar_esperado": placar_esperado,
+        "escanteios": escanteios,
+        "cartoes": cartoes,
+        "probabilidade_modelo": f"Casa {prob_casa*100:.0f}% | Empate {prob_empate*100:.0f}% | Fora {prob_fora*100:.0f}%",
+        "amostra": f"{jogos_m} jogos (mandante) / {jogos_v} jogos (visitante)",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Busca das partidas do dia
+# ---------------------------------------------------------------------------
+
 def buscar_jogos_reais_do_dia():
-    """Filtra as partidas oficiais e reais do dia atual em Brasília."""
+    """Filtra as partidas oficiais e reais do dia atual em Brasília e monta
+    a projeção de cada uma a partir da forma recente real dos dois times."""
     fuso_br = timezone(timedelta(hours=-3))
     data_hoje_br = datetime.now(fuso_br).strftime("%Y-%m-%d")
-    
+
     jogos_filtrados = []
     ids_processados = set()
+    cache_forma = {}  # evita buscar a forma do mesmo time mais de uma vez
 
     for code_liga, nome_liga in LIGAS_ELITE.items():
         url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code_liga}/scoreboard"
         try:
             resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                eventos = resp.json().get("events", [])
-                for ev in eventos:
-                    game_id = ev.get("id")
-                    if game_id in ids_processados:
-                        continue
-                    
-                    data_utc = ev.get("date", "")
-                    hora_brt, data_brt = converter_hora_brasilia(data_utc)
-                    
-                    # Filtra rigorosamente por data
-                    if data_brt == data_hoje_br:
-                        competidores = ev.get("competitions", [{}])[0].get("competitors", [])
-                        if len(competidores) >= 2:
-                            mandante = competidores[0].get("team", {}).get("displayName", "Mandante")
-                            visitante = competidores[1].get("team", {}).get("displayName", "Visitante")
-                            
-                            projecao = calcular_projecoes_e_estatisticas(mandante, visitante)
-                            
-                            ids_processados.add(game_id)
-                            jogos_filtrados.append({
-                                "partida": f"{mandante} x {visitante}",
-                                "liga": nome_liga,
-                                "horario": hora_brt,
-                                "projecao": projecao
-                            })
+            if resp.status_code != 200:
+                continue
+            eventos = resp.json().get("events", [])
         except Exception as e:
             print(f"Aviso ao consultar {nome_liga}: {e}")
+            continue
+
+        for ev in eventos:
+            game_id = ev.get("id")
+            if game_id in ids_processados:
+                continue
+
+            comp = ev.get("competitions", [{}])[0]
+            status_nome = comp.get("status", {}).get("type", {}).get("name", "")
+            if "POSTPONED" in status_nome or "CANCELED" in status_nome or "SUSPENDED" in status_nome:
+                continue
+
+            data_utc = ev.get("date", "")
+            hora_brt, data_brt = converter_hora_brasilia(data_utc)
+            if data_brt != data_hoje_br:
+                continue
+
+            competidores = comp.get("competitors", [])
+            if len(competidores) < 2:
+                continue
+
+            mandante_comp = next((c for c in competidores if c.get("homeAway") == "home"), competidores[0])
+            visitante_comp = next((c for c in competidores if c.get("homeAway") == "away"), competidores[1])
+
+            mandante_nome = mandante_comp.get("team", {}).get("displayName", "Mandante")
+            visitante_nome = visitante_comp.get("team", {}).get("displayName", "Visitante")
+            mandante_id = mandante_comp.get("team", {}).get("id")
+            visitante_id = visitante_comp.get("team", {}).get("id")
+
+            if not mandante_id or not visitante_id:
+                continue
+
+            forma_mandante = obter_forma_recente(code_liga, mandante_id, cache_forma)
+            forma_visitante = obter_forma_recente(code_liga, visitante_id, cache_forma)
+            projecao = projetar_partida(forma_mandante, forma_visitante)
+
+            ids_processados.add(game_id)
+            jogos_filtrados.append({
+                "partida": f"{mandante_nome} x {visitante_nome}",
+                "liga": nome_liga,
+                "horario": hora_brt,
+                "projecao": projecao,
+            })
 
     return jogos_filtrados
+
+
+# ---------------------------------------------------------------------------
+# Montagem e envio do relatório
+# ---------------------------------------------------------------------------
 
 def dividir_mensagem(texto: str, limite: int = 3800) -> list:
     """Fatia textos extensos para respeitar o limite do Telegram."""
@@ -142,6 +360,7 @@ def dividir_mensagem(texto: str, limite: int = 3800) -> list:
         partes.append(texto[:corte])
         texto = texto[corte:].lstrip("\n")
     return partes
+
 
 def enviar_telegram(texto: str) -> None:
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -161,13 +380,14 @@ def enviar_telegram(texto: str) -> None:
         except Exception as e:
             print(f"Erro de rede ao enviar ao Telegram: {e}")
 
+
 def montar_relatorio(jogos):
     fuso_br = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(fuso_br).strftime("%d/%m/%Y")
 
-    msg = f"⚽ <b>RELATÓRIO COMPLETO DE APOSTAS — {data_hoje}</b>\n"
+    msg = f"⚽ <b>RELATÓRIO DE PROJEÇÕES — {data_hoje}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "🏆 <b>ANÁLISE E PROJEÇÕES ESTATÍSTICAS DO DIA</b>\n"
+    msg += "🏆 <b>ESTIMATIVAS BASEADAS NA FORMA RECENTE REAL DOS TIMES</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n\n"
 
     if not jogos:
@@ -179,24 +399,30 @@ def montar_relatorio(jogos):
             msg += f"🏆 <i>{j['liga']}</i> | 🕟 <b>{j['horario']}</b>\n"
             msg += f"👑 <b>Vencedor Provável:</b> {p['vencedor_provavel']}\n"
             msg += f"🎯 <b>Dupla Chance:</b> {p['dupla_chance']}\n"
-            msg += f"⚽ <b>Linha de Gols:</b> {p['gols']} (Placar provável: {p['placar']})\n"
-            msg += f"🚩 <b>Escanteios:</b> {p['cantos_total']} ({p['cantos_detalhe']})\n"
-            msg += f"🟨 <b>Cartões Estimados:</b> {p['cartoes_total']}\n"
-            msg += f"🔥 <b>Confiança Estimada:</b> {p['probabilidade']}\n"
+            msg += f"⚽ <b>Linha de Gols:</b> {p['gols']} (placar aprox.: {p['placar_esperado']})\n"
+            msg += f"🚩 <b>Escanteios:</b> {p['escanteios']}\n"
+            msg += f"🟨 <b>Cartões Estimados:</b> {p['cartoes']}\n"
+            msg += f"📊 <b>Probabilidades do modelo:</b> {p['probabilidade_modelo']}\n"
+            msg += f"🔎 <i>Amostra: {p['amostra']}</i>\n"
             msg += "━━━━━━━━━━━━━━━━━━\n"
 
-    msg += "\n⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>\n"
-    msg += "As estimativas dependem das estatísticas ao vivo e escalações oficiais.\n\n"
-    msg += "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!\n"
-    msg += "Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:\n"
-    msg += "https://superbet.onelink.me/Hqv6/03r54ds3"
+    msg += "\n⚠️ <b>SOBRE ESTE RELATÓRIO</b>\n"
+    msg += (
+        "As estimativas usam um modelo estatístico simplificado (Poisson) "
+        "a partir dos últimos jogos de cada time. Não são garantia de "
+        "resultado e não substituem análise de escalações, lesões e "
+        "contexto da partida. Aposte com responsabilidade.\n"
+    )
 
     return msg
+
 
 def main():
     jogos = buscar_jogos_reais_do_dia()
     relatorio = montar_relatorio(jogos)
+    print(relatorio)  # útil para depuração local antes de enviar
     enviar_telegram(relatorio)
+
 
 if __name__ == "__main__":
     main()
