@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V2 OTIMIZADO
+RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V2.1 OTIMIZADO
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ LIGAS_ELITE = {
 }
 
 N_FORMA = 8
-N_MINIMO = 4
-HISTORICO_DIAS = 45  # Otimizado para execução rápida no GitHub Actions
+N_MINIMO = 3
+HISTORICO_DIAS = 30  # Otimizado para evitar timeout nas requisições
 DECAY = 0.88
-N_MIN_CASA_FORA = 3
+N_MIN_CASA_FORA = 2
 RHO = -0.08
 MAX_GOLS = 8
 
@@ -47,7 +47,7 @@ PAUSA_API = 0.05
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "FootballProjectionBot/2.0 (+https://www.espn.com/)"
+    "User-Agent": "FootballProjectionBot/2.1 (+https://www.espn.com/)"
 })
 
 
@@ -123,18 +123,24 @@ def scoreboard_dia(league_code: str, yyyymmdd: str) -> tuple[dict, ...]:
 
 
 def obter_jogos_do_dia(league_code: str, dt: datetime) -> list[dict]:
-    return list(scoreboard_dia(league_code, dt.strftime("%Y%m%d")))
+    # Consulta o dia atual e dias adjacentes para cobrir discrepâncias de fuso horário
+    eventos_dict = {}
+    for delta in (-1, 0, 1):
+        dia_alvo = dt + timedelta(days=delta)
+        for ev in scoreboard_dia(league_code, dia_alvo.strftime("%Y%m%d")):
+            ev_id = str(ev.get("id", ""))
+            if ev_id:
+                eventos_dict[ev_id] = ev
+    return list(eventos_dict.values())
 
 
 def obter_historico_liga(league_code: str, fim: datetime, dias: int = HISTORICO_DIAS) -> list[dict]:
     eventos: dict[str, dict] = {}
     inicio = fim - timedelta(days=dias)
-    
-    # Consulta em blocos de 5 dias para acelerar a requisicao
     step = 5
     for i in range(0, dias + 1, step):
         dia = inicio + timedelta(days=i)
-        for ev in obter_jogos_do_dia(league_code, dia):
+        for ev in scoreboard_dia(league_code, dia.strftime("%Y%m%d")):
             event_id = str(ev.get("id", ""))
             if event_id:
                 eventos[event_id] = ev
@@ -351,7 +357,7 @@ def projetar_partida(forma_casa: dict, forma_fora: dict, competencia: dict) -> d
     jf = forma_fora["jogos_analisados"]
 
     if jc < N_MINIMO or jf < N_MINIMO:
-        return {"dados_suficientes": False, "qualidade": "INSUFICIENTE", "amostra": f"{jc} jogos (casa) / {jf} jogos (fora)"}
+        return {"dados_suficientes": False, "qualidade": "AMOSTRA INSUFICIENTE", "amostra": f"{jc} casa / {jf} fora"}
 
     lc, lf = calcular_lambdas(forma_casa, forma_fora, competencia)
     matriz = matriz_probabilidades(lc, lf)
@@ -377,7 +383,7 @@ def projetar_partida(forma_casa: dict, forma_fora: dict, competencia: dict) -> d
 
     return {
         "dados_suficientes": True,
-        "qualidade": "ALTA" if min(jc, jf) >= 8 else "BOA",
+        "qualidade": "ALTA" if min(jc, jf) >= 6 else "BOA",
         "amostra": f"{jc} jogos (casa) / {jf} jogos (fora)",
         "lambda_casa": lc,
         "lambda_fora": lf,
@@ -393,7 +399,7 @@ def projetar_partida(forma_casa: dict, forma_fora: dict, competencia: dict) -> d
 
 def buscar_jogos_reais_do_dia() -> list[dict]:
     hoje = agora_brt()
-    dia_hoje = data_brt(hoje)
+    dia_hoje_str = data_brt(hoje)
     jogos = []
     ids = set()
     cache_forma = {}
@@ -410,12 +416,9 @@ def buscar_jogos_reais_do_dia() -> list[dict]:
 
             hora, data_jogo = converter_hora_brasilia(ev.get("date", ""))
             
-            # Validação flexível para capturar partidas no mesmo dia de Brasília
-            if data_jogo != dia_hoje and not partida_concluida(ev):
-                # Se não for idêntica à data local, verifica se a partida ainda está agendada para o dia atual
-                dt_evt = datetime.fromisoformat(ev.get("date", "").replace("Z", "+00:00")).astimezone(BRT)
-                if dt_evt.date() != hoje.date():
-                    continue
+            # Validação flexível: inclui jogos agendados dentro da mesma data local no Brasil
+            if data_jogo != dia_hoje_str:
+                continue
 
             casa, fora = obter_times(ev)
             if not casa or not fora:
@@ -459,7 +462,7 @@ def montar_relatorio(jogos: list[dict]) -> str:
             p = j["projecao"]
             msg += f"⚽ <b>{html.escape(j['partida'])}</b>\n🏆 <i>{html.escape(j['liga'])}</i> | 🕟 <b>{j['horario']}</b>\n"
             if not p["dados_suficientes"]:
-                msg += f"⚠️ <b>Dados:</b> {p['qualidade']}\n━━━━━━━━━━━━━━━━━━\n"
+                msg += f"⚠️ <b>Dados:</b> {p['qualidade']}\n━━━━━━━━━━━━━━━━━━\n\n"
                 continue
 
             msg += (
@@ -470,11 +473,11 @@ def montar_relatorio(jogos: list[dict]) -> str:
                 f"🎯 <b>Placares mais prováveis:</b> {p['placar']}\n"
                 f"📊 <b>Prob. 1X2:</b> {p['probabilidades']}\n"
                 f"📐 <b>xG Estimado:</b> {p['lambda_casa']:.2f} x {p['lambda_fora']:.2f}\n"
-                "━━━━━━━━━━━━━━━━━━\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
             )
 
     msg += (
-        "\n⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>\n"
+        "⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>\n"
         "Probabilidades estatísticas sem garantia de resultado. Aposte com responsabilidade.\n\n"
         "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!\n"
         "Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:\n"
@@ -496,7 +499,7 @@ def enviar_telegram(texto: str) -> None:
 
 
 def main() -> None:
-    print("Iniciando Relatório V2 Otimizado...")
+    print("Iniciando Relatório V2.1 Otimizado...")
     try:
         jogos = buscar_jogos_reais_do_dia()
         relatorio = montar_relatorio(jogos)
