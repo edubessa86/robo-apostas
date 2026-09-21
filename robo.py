@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.9
-- Filtro estrito de horário: Apenas jogos a partir das 10:00 BRT
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V6.0
+- Chamada de afiliado atualizada para a Superbet (100 Giros Grátis)
+- Filtro estrito de horário: Jogos a partir das 10:00 BRT
 - Whitelist de Grandes Ligas: Priorização automática de campeonatos relevantes
 - Tratamento de cota do Gemini (429) com Fallback Dinâmico e HTML seguro
-- Links direcionados para a Sportingbet e Cadastro com Recompensa
+- Links direcionados para a Sportingbet por confronto
 """
 
 from datetime import datetime, timedelta
@@ -26,9 +27,10 @@ GEMINI_API_KEY = obter_env("GEMINI_API_KEY")
 API_FOOTBALL_KEY = obter_env("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = obter_env("API_FOOTBALL_KEY_2")
 
+# Link de indicação/afiliado da Superbet
 LINK_CADASTRO_RECOMPENSA = obter_env(
     "LINK_CADASTRO_RECOMPENSA", 
-    "https://seu-link-de-afiliado-aqui.com/cadastre-se"
+    "https://superbet.onelink.me/Hqv6/55k8441f"
 )
 
 MODELO = "gemini-3.6-flash"
@@ -257,9 +259,9 @@ REGRAS ESTRITAS DE FORMATO:
 🔴 Abaixo de 7/10 → evitar
 ⚠️ Odds são referências e mudam. Aposte com responsabilidade.
 
-🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>
-Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaixo:
-👉 <a href="{LINK_CADASTRO_RECOMPENSA}">CLIQUE AQUI PARA SE CADASTRAR E GANHAR</a>
+🎁 <b>JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!</b>
+Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
+👉 <a href="{LINK_CADASTRO_RECOMPENSA}">CLIQUE AQUI PARA JOGAR NA SUPERBET</a>
 """
 
 
@@ -362,9 +364,9 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
         "🟡 7–7.5/10 → stake reduzida",
         "🔴 Abaixo de 7/10 → evitar",
         "⚠️ Odds são referências e mudam. Aposte com responsabilidade.\n",
-        "🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>",
-        "Ganhe bônus de boas-vindas e giros grátis se cadastrando no link abaixo:",
-        f"👉 <a href=\"{LINK_CADASTRO_RECOMPENSA}\">CLIQUE AQUI PARA SE CADASTRAR E GANHAR</a>"
+        "🎁 <b>JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!</b>",
+        "Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:",
+        f"👉 <a href=\"{LINK_CADASTRO_RECOMPENSA}\">CLIQUE AQUI PARA JOGAR NA SUPERBET</a>"
     ])
     
     return "\n".join(linhas)
@@ -413,7 +415,7 @@ def executar_robo():
     if relatorio:
         enviar_telegram(relatorio)
     elif jogos_brutos:
-        print("[AVISO] Gerando relatório emergencial com ligas principais e horários ajustados...")
+        print("[AVISO] Gerando relatório emergencial com link de afiliado da Superbet...")
         relatorio_emergencia = formatar_fallback_emergencial(jogos_brutos, fonte_usada, data_hoje)
         enviar_telegram(relatorio_emergencia)
     else:
