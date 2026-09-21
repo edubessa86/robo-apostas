@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List
@@ -10,46 +11,43 @@ def coletar_fixtures_oddspapi() -> List[Dict[str, Any]]:
     data_iso = agora_brt.strftime("%Y-%m-%d")
     fixtures_coletadas = []
 
-    api_key = os.getenv("API_FOOTBALL_KEY") or os.getenv("API_FOOTBALL_KEY_2")
+    # Token individual da Football-Data.org
+    token = os.getenv("FOOTBALL_DATA_KEY") or "f69f2ff03e884589ab432cd58501ec56"
     
-    if not api_key:
-        print("[ERROR] Nenhuma chave API_FOOTBALL_KEY encontrada nas variáveis de ambiente.")
-        return fixtures_coletadas
-
-    # Adicionado o fuso horário de Brasília para consultar a data correta
-    url = f"https://v3.football.api-sports.io/fixtures?date={data_iso}&timezone=America/Sao_Paulo"
+    url = f"https://api.football-data.org/v4/matches?dateFrom={data_iso}&dateTo={data_iso}"
     headers = {
-        "x-apisports-key": api_key,
-        "x-rapidapi-key": api_key
+        "X-Auth-Token": token
     }
 
     try:
         response = requests.get(url, headers=headers, timeout=15)
+        
+        # Tratamento do Rate Limiting / Throttling (HTTP 429)
+        if response.status_code == 429:
+            wait_time = int(response.headers.get("X-RequestCounter-Reset", 60))
+            print(f"[WARN] Limite de requisições atingido. Aguardando {wait_time}s para tentar novamente...")
+            time.sleep(wait_time)
+            response = requests.get(url, headers=headers, timeout=15)
+
         if response.status_code == 200:
             data = response.json()
-            
-            # Diagnóstico de avisos ou erros internos do plano na API-Football
-            errors = data.get("errors")
-            if errors and len(errors) > 0:
-                print(f"[WARN] API-Football retornou alerta no JSON: {errors}")
-
-            matches = data.get("response", [])
-            print(f"[DEBUG] Total de partidas brutas retornadas no JSON: {len(matches)}")
+            matches = data.get("matches", [])
+            print(f"[OK] Total de jogos encontrados no dia: {len(matches)}")
 
             for match in matches:
-                status_short = match.get("fixture", {}).get("status", {}).get("short", "")
-                
-                # Descarta partidas finalizadas ou canceladas
-                if status_short in ["FT", "AET", "PEN", "CANC", "ABD"]:
+                status = match.get("status")
+                # Descarta jogos finalizados, adiados ou cancelados
+                if status in ["FINISHED", "CANCELLED", "POSTPONED"]:
                     continue
 
-                league_name = match.get("league", {}).get("name", "Futebol Profissional")
-                home_team = match.get("teams", {}).get("home", {}).get("name", "Mandante")
-                away_team = match.get("teams", {}).get("away", {}).get("name", "Visitante")
-                start_time_iso = match.get("fixture", {}).get("date")
+                external_id = str(match.get("id"))
+                league_name = match.get("competition", {}).get("name", "Futebol Profissional")
+                home_team = match.get("homeTeam", {}).get("name", "Mandante")
+                away_team = match.get("awayTeam", {}).get("name", "Visitante")
+                start_time_iso = match.get("utcDate")
 
                 fixtures_coletadas.append({
-                    "external_id": str(match.get("fixture", {}).get("id")),
+                    "external_id": external_id,
                     "league": league_name,
                     "home_team": home_team,
                     "away_team": away_team,
@@ -61,11 +59,12 @@ def coletar_fixtures_oddspapi() -> List[Dict[str, Any]]:
                         "betano.bet.br": {"Home": 2.15, "Draw": 3.30, "Away": 3.45}
                     }
                 })
-            print(f"[OK] {len(fixtures_coletadas)} jogos restantes filtrados com sucesso.")
+
+            print(f"[OK] {len(fixtures_coletadas)} jogos prontos para análise.")
         else:
-            print(f"[ERROR] API-Football retornou HTTP {response.status_code}")
+            print(f"[ERROR] API retornou HTTP {response.status_code}: {response.text}")
 
     except Exception as e:
-        print(f"[ERROR] Erro ao consultar API-Football: {e}")
+        print(f"[ERROR] Erro ao consultar Football-Data.org: {e}")
 
     return fixtures_coletadas
