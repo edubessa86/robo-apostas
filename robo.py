@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.7
-- Fallback dinâmico: variações automáticas de mercados, odds, escanteios e placares
-- IA Gemini 3.6 Flash com busca no Google
-- Links direcionados da Sportingbet por confronto
-- Layout HTML Telegram corrigido e sanitizado
-- Link de cadastro e recompensa integrado
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.8
+- Filtro de fuso horário UTC -> BRT (elimina jogos da madrugada/dia anterior)
+- Priorização de grandes ligas de futebol
+- Fallback emergencial dinâmico e inteligente
+- Envio formatado em HTML com links para a Sportingbet e Cadastro com Recompensa
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import urllib.parse
 import requests
@@ -27,7 +26,6 @@ GEMINI_API_KEY = obter_env("GEMINI_API_KEY")
 API_FOOTBALL_KEY = obter_env("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = obter_env("API_FOOTBALL_KEY_2")
 
-# Link de indicação/cadastro com recompensa
 LINK_CADASTRO_RECOMPENSA = obter_env(
     "LINK_CADASTRO_RECOMPENSA", 
     "https://seu-link-de-afiliado-aqui.com/cadastre-se"
@@ -35,23 +33,25 @@ LINK_CADASTRO_RECOMPENSA = obter_env(
 
 MODELO = "gemini-3.6-flash"
 
-# Session HTTP com Headers Anti-Bloqueio
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     "Referer": "https://www.espn.com.br/",
-    "Origin": "https://www.espn.com.br",
-    "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site"
+    "Origin": "https://www.espn.com.br"
 })
 
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+def converter_utc_para_brt(data_utc_str: str):
+    """Converte string ISO em UTC para objeto datetime no fuso de Brasília (UTC-3)."""
+    try:
+        dt_utc = datetime.fromisoformat(data_utc_str.replace("Z", "+00:00"))
+        return dt_utc - timedelta(hours=3)
+    except Exception:
+        return None
 
 
 def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
@@ -108,14 +108,8 @@ def verificar_status_api_football(api_key: str) -> bool:
         response = SESSION.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            resp_data = data.get("response")
-            if isinstance(resp_data, list) and len(resp_data) > 0:
-                requests_info = resp_data[0].get("requests", {})
-            elif isinstance(resp_data, dict):
-                requests_info = resp_data.get("requests", {})
-            else:
-                requests_info = {}
-
+            resp_data = data.get("response", {})
+            requests_info = resp_data.get("requests", {}) if isinstance(resp_data, dict) else {}
             current = requests_info.get("current", 0)
             limit = requests_info.get("limit_day", 100)
             print(f"[INFO] API-Football -> Consumidas hoje: {current}/{limit}")
@@ -138,32 +132,45 @@ def buscar_jogos_api_football(data_hoje_iso: str):
                 resp = SESSION.get(url, headers=headers, timeout=15)
                 if resp.status_code == 200:
                     dados = resp.json().get("response", [])
-                    if dados:
-                        print(f"[OK] Encontrados {len(dados)} jogos via {nome}.")
-                        return dados, nome
+                    jogos_filtrados = []
+                    for item in dados:
+                        date_utc = item.get("fixture", {}).get("date", "")
+                        dt_brt = converter_utc_para_brt(date_utc)
+                        # Filtra apenas jogos que ocorrem hoje em BRT e a partir das 08:00 BRT
+                        if dt_brt and dt_brt.strftime("%Y-%m-%d") == data_hoje_iso and dt_brt.hour >= 8:
+                            item["hora_brt"] = dt_brt.strftime("%H:%M")
+                            jogos_filtrados.append(item)
+                    if jogos_filtrados:
+                        print(f"[OK] Encontrados {len(jogos_filtrados)} jogos válidos via {nome}.")
+                        return jogos_filtrados, nome
             except Exception as e:
                 print(f"[ERRO] Falha {nome}: {e}")
     return None, None
 
 
-def buscar_jogos_espn():
+def buscar_jogos_espn(data_hoje_iso: str):
     print("[INFO] Consultando feed público da ESPN...")
     url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
     try:
         resp = SESSION.get(url, timeout=15)
         if resp.status_code == 200:
             eventos = resp.json().get("events", [])
-            print(f"[OK] ESPN retornou {len(eventos)} eventos.")
-            return eventos
-        else:
-            print(f"[AVISO] ESPN status {resp.status_code}")
+            eventos_filtrados = []
+            for ev in eventos:
+                date_utc = ev.get("date", "")
+                dt_brt = converter_utc_para_brt(date_utc)
+                # Garante fuso horário BRT e remove jogos da madrugada
+                if dt_brt and dt_brt.strftime("%Y-%m-%d") == data_hoje_iso and dt_brt.hour >= 8:
+                    ev["hora_brt"] = dt_brt.strftime("%H:%M")
+                    eventos_filtrados.append(ev)
+            print(f"[OK] ESPN retornou {len(eventos_filtrados)} eventos válidos para hoje.")
+            return eventos_filtrados
     except Exception as e:
         print(f"[ERRO] ESPN: {e}")
     return []
 
 
 def gerar_link_sportingbet(nome_confronto: str) -> str:
-    """Gera link de busca direto para a partida na Sportingbet."""
     termo = urllib.parse.quote_plus(f"sportingbet apostas {nome_confronto}")
     return f"https://www.google.com/search?q={termo}"
 
@@ -171,7 +178,8 @@ def gerar_link_sportingbet(nome_confronto: str) -> str:
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
     return f"""
 Você é um analista profissional de apostas esportivas.
-Com base nos dados fornecidos abaixo para {data_hoje} (Horário de Brasília, UTC-3), gere um relatório de apostas detalhado e completo para o Telegram.
+Sua missão é selecionar os PRINCIPAIS JOGOS DE HOJE ({data_hoje}) das grandes ligas (Brasileirão, Champions League, Premier League, La Liga, Serie A, Ligue 1, Libertadores, Sul-Americana, etc.).
+Descarte jogos da madrugada (entre 00:00 e 07:00).
 
 DADOS DOS JOGOS DISPONÍVEIS:
 {dados_jogos_str}
@@ -179,9 +187,7 @@ DADOS DOS JOGOS DISPONÍVEIS:
 REGRAS ESTRITAS DE FORMATO:
 1. Analise cada jogo trazendo palpite de Vencedor/Mercado, Odd estimada, Nível de Confiança, Escanteios, Cartões e Placar Provável.
 2. Para CADA jogo, você DEVE colocar o link da Sportingbet no formato: `<a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>`.
-3. Siga EXATAMENTE a estrutura visual HTML abaixo, sem alterar as tags.
-
-ESTRUTURA OBRIGATÓRIA DA MENSAGEM (HTML):
+3. Siga EXATAMENTE a estrutura visual HTML abaixo:
 
 🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>
 
@@ -193,7 +199,7 @@ ESTRUTURA OBRIGATÓRIA DA MENSAGEM (HTML):
 ━━━━━━━━━━━━━━━━━━
 
 🥇 ⚽️ <b>[TIME A] x [TIME B]</b>
-🕟 [Horário] 🇧🇷
+🕟 [Horário BRT] 🇧🇷
 🎯 <b>Mercado Principal:</b> [Ex: Vitória do Mandante / Dupla Chance]
 📊 Odd mercado: ~[Ex: 1.65]
 🔥 Confiança: [Ex: 8.5/10]
@@ -204,8 +210,6 @@ ESTRUTURA OBRIGATÓRIA DA MENSAGEM (HTML):
 💎 Melhor entrada: [Ex: Casa Vence + Over 1.5]
 🔗 <a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>
 ━━━━━━━━━━━━━━━━━━
-
-(Repita a estrutura acima utilizando 🥈 ⚽️, 🥉 ⚽️ e ⚽️ para os demais jogos do dia)
 
 📊 <b>GESTÃO DE BANCA</b>
 ━━━━━━━━━━━━━━━━━━
@@ -222,10 +226,8 @@ Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaix
 
 
 def formatar_fallback_emergencial(jogos, origem, data_hoje):
-    """Fallback emergencial com variações dinâmicas para cada jogo."""
     medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️", "⚽️"]
     
-    # Matriz de variações para evitar repetição de estatísticas no fallback
     variacoes = [
         {
             "mercado": "Vitória do Favorito / Casa Vence",
@@ -238,14 +240,14 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
             "entrada": "Vitória Mandante + Over 1.5"
         },
         {
-            "mercado": "Dupla Chance & Ambas Marcam",
+            "mercado": "Dupla Chance (1X) & Ambas Marcam",
             "odd": "~1.60 – 1.85",
             "confianca": "8.0/10",
             "gols": "Ambas Marcam (Sim)",
             "escanteios": "9–12 estimados",
             "cartoes": "4–6 estimados",
             "placar": "1x1 / 2x1",
-            "entrada": "Dupla Chance + Mais de 1.5 Gols"
+            "entrada": "1X + Mais de 1.5 Gols"
         },
         {
             "mercado": "Empate Anula Aposta (DNB)",
@@ -266,16 +268,6 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
             "cartoes": "5–7 estimados",
             "placar": "3x1 / 2x2",
             "entrada": "Over 2.5 Gols Asiático"
-        },
-        {
-            "mercado": "Handicap Asiático 0 (Empate Anula)",
-            "odd": "~1.55 – 1.80",
-            "confianca": "8.0/10",
-            "gols": "Over 1.5 Gols",
-            "escanteios": "8–10 estimados",
-            "cartoes": "4–5 estimados",
-            "placar": "0x2 / 1x2",
-            "entrada": "Handicap 0 Visitante"
         }
     ]
 
@@ -292,19 +284,16 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
     for idx, ev in enumerate(jogos[:6]):
         if "ESPN" in origem:
             nome = ev.get("name", "Confronto Esportivo")
-            hora_str = "Horário a confirmar"
+            hora_str = f"{ev.get('hora_brt', '16:00')} BRT"
         else:
             teams = ev.get("teams", {})
             home = teams.get("home", {}).get("name", "Mandante")
             away = teams.get("away", {}).get("name", "Visitante")
             nome = f"{home} x {away}"
-            date_raw = ev.get("fixture", {}).get("date", "")
-            hora_str = date_raw.split("T")[1][:5] + " BRT" if "T" in date_raw else "Horário a confirmar"
+            hora_str = f"{ev.get('hora_brt', '16:00')} BRT"
 
         medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
         link_sportingbet = gerar_link_sportingbet(nome)
-        
-        # Seleciona uma variação diferente para cada jogo
         var = variacoes[idx % len(variacoes)]
 
         linhas.append(
@@ -342,22 +331,22 @@ def executar_robo():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     data_hoje_iso = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Coleta das partidas
+    # 1. Coleta e filtragem dos jogos do dia
     jogos_brutos, fonte_usada = buscar_jogos_api_football(data_hoje_iso)
     
     if jogos_brutos:
         dados_contexto = f"Partidas via {fonte_usada}: {str(jogos_brutos[:10])}"
     else:
-        eventos_espn = buscar_jogos_espn()
+        eventos_espn = buscar_jogos_espn(data_hoje_iso)
         if eventos_espn:
             fonte_usada = "ESPN Public API"
             jogos_brutos = eventos_espn
             dados_contexto = f"Partidas via ESPN: {str(eventos_espn[:10])}"
         else:
             fonte_usada = "Google Search Grounding"
-            dados_contexto = "Pesquise na web os jogos de futebol mais relevantes agendados para hoje."
+            dados_contexto = f"Pesquise os principais jogos de futebol de grandes ligas para hoje ({data_hoje})."
 
-    # 2. Geração do relatório via IA
+    # 2. Geração via IA Gemini
     prompt = montar_prompt(data_hoje, dados_contexto)
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool])
@@ -377,11 +366,11 @@ def executar_robo():
     except Exception as e:
         print(f"[ERRO] Exceção geral na IA: {e}")
 
-    # 3. Envio do relatório ou fallback formatado
+    # 3. Envio no Telegram
     if relatorio:
         enviar_telegram(relatorio)
     elif jogos_brutos:
-        print("[AVISO] Gerando relatório emergencial com layout dinâmico...")
+        print("[AVISO] Gerando relatório emergencial com horários e ligas corrigidas...")
         relatorio_emergencia = formatar_fallback_emergencial(jogos_brutos, fonte_usada, data_hoje)
         enviar_telegram(relatorio_emergencia)
     else:
