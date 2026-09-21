@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.3
-- Proteção contra bloqueio HTTP 403 (Headers de Navegador Completo)
-- Integração com Gemini API (gemini-2.5-flash) + Google Search Grounding
-- Fallback para API-Football e ESPN Public API
-- Link de cadastro personalizado com recompensa ao final das mensagens
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.4
+- Atualizado para o modelo Gemini 3.6 Flash (gemini-3.6-flash)
+- Sanitização automática de chaves de API (remove \n e espaços acidentais)
+- Tratamento robusto da estrutura JSON da API-Football
+- Headers anti-403 para a ESPN e link de recompensa Telegram
 """
 
 from datetime import datetime
@@ -16,22 +16,27 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-# --- CONFIGURAÇÕES DE AMBIENTE ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
-API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
+# --- CONFIGURAÇÕES E SANITIZAÇÃO DE AMBIENTE ---
+def obter_env(nome: str, padrao: str = "") -> str:
+    valor = os.environ.get(nome, padrao)
+    return valor.strip() if valor else ""
 
-# Link de indicação/cadastro com recompensa (Pode ser configurado nas Secrets do GitHub)
-LINK_CADASTRO_RECOMPENSA = os.environ.get(
+TELEGRAM_TOKEN = obter_env("TELEGRAM_TOKEN")
+CHAT_ID = obter_env("TELEGRAM_CHAT_ID")
+GEMINI_API_KEY = obter_env("GEMINI_API_KEY")
+API_FOOTBALL_KEY = obter_env("API_FOOTBALL_KEY")
+API_FOOTBALL_KEY_2 = obter_env("API_FOOTBALL_KEY_2")
+
+# Link de indicação/cadastro com recompensa
+LINK_CADASTRO_RECOMPENSA = obter_env(
     "LINK_CADASTRO_RECOMPENSA", 
-    "https://seu-link-de-afiliado-aqui.com/cadastre-se"  # <-- Substitua pelo seu novo link se preferir deixar fixo
+    "https://seu-link-de-afiliado-aqui.com/cadastre-se"
 )
 
-MODELO = "gemini-2.5-flash"
+# Atualizado para a nova versão exigida pela API do Google
+MODELO = "gemini-3.6-flash"
 
-# Session com Headers anti-bloqueio (Evita HTTP 403 no GitHub Actions)
+# Session com Headers anti-bloqueio para chamadas públicas
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -99,7 +104,7 @@ def enviar_telegram(texto: str) -> bool:
 
 
 def verificar_status_api_football(api_key: str) -> bool:
-    """Valida cota disponível na API-Football."""
+    """Valida cota disponível na API-Football tratando retornos em lista ou dicionário."""
     if not api_key:
         return False
     url = "https://v3.football.api-sports.io/status"
@@ -108,9 +113,16 @@ def verificar_status_api_football(api_key: str) -> bool:
         response = SESSION.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            resp_data = data.get("response", {})
-            requests_info = resp_data[0].get("requests", {}) if isinstance(resp_data, list) and resp_data else resp_data.get("requests", {})
+            resp_data = data.get("response")
             
+            # Trata se a resposta vier dentro de uma lista ou dicionário
+            if isinstance(resp_data, list) and len(resp_data) > 0:
+                requests_info = resp_data[0].get("requests", {})
+            elif isinstance(resp_data, dict):
+                requests_info = resp_data.get("requests", {})
+            else:
+                requests_info = {}
+
             current = requests_info.get("current", 0)
             limit = requests_info.get("limit_day", 100)
             print(f"[INFO] API-Football -> Consumidas hoje: {current}/{limit}")
@@ -164,7 +176,7 @@ def buscar_jogos_espn():
 
 
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
-    """Gera a instrução do prompt incluindo o novo link de cadastro com recompensa."""
+    """Gera a instrução do prompt incluindo o link de cadastro com recompensa."""
     return f"""
 Você é um sistema automatizado de análise profissional de apostas esportivas.
 Com base nos dados fornecidos abaixo para a data de hoje ({data_hoje}, fuso de Brasília, UTC-3), produza um relatório de apostas de altíssimo nível para o Telegram.
@@ -205,7 +217,7 @@ Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaix
 
 
 def formatar_fallback_emergencial(jogos, origem, data_hoje):
-    """Fallback emergencial contendo o novo link de cadastro."""
+    """Fallback emergencial contendo o link de cadastro."""
     linhas = [
         f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>\n",
         "━━━━━━━━━━━━━━━━━━",
@@ -254,7 +266,7 @@ def executar_robo():
             fonte_usada = "Google Search Grounding"
             dados_contexto = "Realize busca na web para consultar as partidas de futebol marcadas para o dia de hoje."
 
-    # 2. Execução da IA com busca web
+    # 2. Execução da IA com busca web (Gemini 3.6 Flash)
     prompt = montar_prompt(data_hoje, dados_contexto)
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool])
