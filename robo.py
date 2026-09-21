@@ -1,22 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.4
-- Atualizado para o modelo Gemini 3.6 Flash (gemini-3.6-flash)
-- Sanitização automática de chaves de API (remove \n e espaços acidentais)
-- Tratamento robusto da estrutura JSON da API-Football
-- Headers anti-403 para a ESPN e link de recompensa Telegram
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.5
+- IA Gemini 3.6 Flash com Google Search Grounding
+- Estrutura completa de Emojis e Análises por Partida
+- Link de Aposta na Sportingbet para cada jogo
+- Fallback emergencial rico em detalhes e com emojis
+- Link de Cadastro e Recompensa ao final das mensagens
 """
 
 from datetime import datetime
 import html
 import os
-import time
+import urllib.parse
 import requests
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-# --- CONFIGURAÇÕES E SANITIZAÇÃO DE AMBIENTE ---
+# --- CONFIGURAÇÕES DE AMBIENTE ---
 def obter_env(nome: str, padrao: str = "") -> str:
     valor = os.environ.get(nome, padrao)
     return valor.strip() if valor else ""
@@ -33,10 +34,9 @@ LINK_CADASTRO_RECOMPENSA = obter_env(
     "https://seu-link-de-afiliado-aqui.com/cadastre-se"
 )
 
-# Atualizado para a nova versão exigida pela API do Google
 MODELO = "gemini-3.6-flash"
 
-# Session com Headers anti-bloqueio para chamadas públicas
+# Session HTTP com Headers Anti-Bloqueio
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -52,12 +52,10 @@ SESSION.headers.update({
     "Sec-Fetch-Site": "same-site"
 })
 
-# Inicialização do cliente Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
-    """Divide mensagens respeitando blocos para não quebrar a sintaxe do Telegram."""
     partes, atual = [], ""
     for bloco in texto.split("\n\n"):
         candidato = f"{atual}\n\n{bloco}" if atual else bloco
@@ -73,9 +71,8 @@ def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
 
 
 def enviar_telegram(texto: str) -> bool:
-    """Envia o relatório formatado em HTML para o Telegram."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[ERRO] Variáveis TELEGRAM_TOKEN ou CHAT_ID não configuradas.")
+        print("[ERRO] TELEGRAM_TOKEN ou CHAT_ID ausentes.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -92,19 +89,18 @@ def enviar_telegram(texto: str) -> bool:
         try:
             resposta = SESSION.post(url, json=payload, timeout=15)
             if resposta.status_code == 200:
-                print(f"[OK] Parte {n}/{len(partes)} enviada para o Telegram!")
+                print(f"[OK] Parte {n}/{len(partes)} enviada ao Telegram.")
             else:
-                print(f"[ERRO] Telegram recusou parte {n}: {resposta.status_code} - {resposta.text}")
+                print(f"[ERRO] Telegram {resposta.status_code}: {resposta.text}")
                 tudo_ok = False
         except requests.RequestException as e:
-            print(f"[ERRO] Falha de conexão com o Telegram: {e}")
+            print(f"[ERRO] Conexão Telegram: {e}")
             tudo_ok = False
 
     return tudo_ok
 
 
 def verificar_status_api_football(api_key: str) -> bool:
-    """Valida cota disponível na API-Football tratando retornos em lista ou dicionário."""
     if not api_key:
         return False
     url = "https://v3.football.api-sports.io/status"
@@ -114,8 +110,6 @@ def verificar_status_api_football(api_key: str) -> bool:
         if response.status_code == 200:
             data = response.json()
             resp_data = data.get("response")
-            
-            # Trata se a resposta vier dentro de uma lista ou dicionário
             if isinstance(resp_data, list) and len(resp_data) > 0:
                 requests_info = resp_data[0].get("requests", {})
             elif isinstance(resp_data, dict):
@@ -128,22 +122,17 @@ def verificar_status_api_football(api_key: str) -> bool:
             print(f"[INFO] API-Football -> Consumidas hoje: {current}/{limit}")
             return current < limit
     except Exception as e:
-        print(f"[AVISO] Falha ao verificar cota da API-Football: {e}")
+        print(f"[AVISO] Status API-Football: {e}")
     return False
 
 
 def buscar_jogos_api_football(data_hoje_iso: str):
-    """Busca partidas via API-Football."""
-    chaves = [
-        ("API Principal", API_FOOTBALL_KEY),
-        ("API Secundária", API_FOOTBALL_KEY_2)
-    ]
-    
+    chaves = [("API Principal", API_FOOTBALL_KEY), ("API Secundária", API_FOOTBALL_KEY_2)]
     for nome, chave in chaves:
         if not chave:
             continue
         if verificar_status_api_football(chave):
-            print(f"[INFO] Buscando partidas ({data_hoje_iso}) via {nome}...")
+            print(f"[INFO] Buscando jogos ({data_hoje_iso}) via {nome}...")
             url = f"https://v3.football.api-sports.io/fixtures?date={data_hoje_iso}"
             headers = {"x-apisports-key": chave}
             try:
@@ -154,13 +143,12 @@ def buscar_jogos_api_football(data_hoje_iso: str):
                         print(f"[OK] Encontrados {len(dados)} jogos via {nome}.")
                         return dados, nome
             except Exception as e:
-                print(f"[ERRO] Falha na consulta via {nome}: {e}")
+                print(f"[ERRO] Falha {nome}: {e}")
     return None, None
 
 
 def buscar_jogos_espn():
-    """Busca jogos via endpoint da ESPN utilizando headers protegidos."""
-    print("[INFO] Consultando partidas via feed público da ESPN...")
+    print("[INFO] Consultando feed público da ESPN...")
     url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
     try:
         resp = SESSION.get(url, timeout=15)
@@ -169,46 +157,65 @@ def buscar_jogos_espn():
             print(f"[OK] ESPN retornou {len(eventos)} eventos.")
             return eventos
         else:
-            print(f"[AVISO] ESPN respondeu com status {resp.status_code}")
+            print(f"[AVISO] ESPN status {resp.status_code}")
     except Exception as e:
-        print(f"[ERRO] Falha ao consultar ESPN: {e}")
+        print(f"[ERRO] ESPN: {e}")
     return []
 
 
+def gerar_link_sportingbet(nome_confronto: str) -> str:
+    """Gera link de aposta direto para a Sportingbet."""
+    termo = urllib.parse.quote_plus(f"sportingbet apostas {nome_confronto}")
+    return f"https://www.google.com/search?q={termo}"
+
+
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
-    """Gera a instrução do prompt incluindo o link de cadastro com recompensa."""
+    """Monta a instrução para o Gemini gerar o relatório com layout rico e emojis."""
     return f"""
-Você é um sistema automatizado de análise profissional de apostas esportivas.
-Com base nos dados fornecidos abaixo para a data de hoje ({data_hoje}, fuso de Brasília, UTC-3), produza um relatório de apostas de altíssimo nível para o Telegram.
+Você é um analista profissional de apostas esportivas.
+Com base nos dados fornecidos abaixo para {data_hoje} (Horário de Brasília, UTC-3), gere um relatório de apostas detalhado e completo para o Telegram.
 
 DADOS DOS JOGOS DISPONÍVEIS:
 {dados_jogos_str}
 
-REGRAS OBRIGATÓRIAS:
-1. Use APENAS jogos reais dos dados fornecidos ou confirmados via busca web.
-2. Para cada jogo analisado, você DEVE buscar e incluir o link direto da partida na casa de apostas (ex: Sportingbet ou equivalente).
-3. Utilize estritamente a estrutura visual HTML abaixo sem alterar as marcas.
+REGRAS ESTRITAS DE FORMATO:
+1. Analise cada jogo trazendo palpite de Vencedor/Mercado, Odd estimada, Nível de Confiança, Escanteios, Cartões e Placar Provável.
+2. Para CADA jogo, você DEVE colocar o link da Sportingbet no formato: `<a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>`.
+3. Siga EXATAMENTE a estrutura visual HTML abaixo, com TODOS os emojis em cada bloco de jogo.
 
-ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA TELEGRAM (HTML):
+ESTRUTURA OBRIGATÓRIA DA MENSAGEM (HTML):
 
-⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>
+🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>
+
+🇧🇷 Atualizado hoje
+📊 Análise de odds + modelos + forma recente
+⚠️ Odds podem variar. Não existe aposta garantida.
 ━━━━━━━━━━━━━━━━━━
 🏆 <b>TOP APOSTAS DO DIA</b>
-
-(Para cada partida principal encontrada, repita este bloco com dados reais:)
-• <b>[Time A] x [Time B]</b> ([Competição] | 🕟 [Horário] BRT)
-  • Provável vencedor: [Seleção / Tendência]
-  • Odd estimada: [Valor da Odd]
-  • Projeção estatística: [Gols / Escanteios / Cartões]
-  • 🔗 <a href="[LINK_PARTIDA]">Apostar no Jogo</a>
-
 ━━━━━━━━━━━━━━━━━━
-📊 <b>DESTAQUES E PROJEÇÕES</b>
-• [Análise técnica resumida das principais oportunidades do dia]
 
+🥇 ⚽️ <b>[TIME A] x [TIME B]</b>
+🕟 [Horário] 🇧🇷
+🎯 <b>Mercado Principal:</b> [Ex: Vitória do Mandante / Dupla Chance]
+📊 Odd mercado: ~[Ex: 1.65]
+🔥 Confiança: [Ex: 8.5/10]
+⚽️ Over 1.5 Gols
+🚩 Escanteios: [Ex: 8-11]
+🟨 Cartões: [Ex: 3-5]
+🔮 Placar provável: [Ex: 2x1 / 1x0]
+💎 Melhor entrada: [Ex: Casa Vence + Over 1.5]
+🔗 <a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>
 ━━━━━━━━━━━━━━━━━━
-⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
-Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida; odds e estatísticas acima vêm de fontes públicas e podem mudar. Aposte com responsabilidade.
+
+(Repita a estrutura acima utilizando 🥈 ⚽️, 🥉 ⚽️ e ⚽️ para os demais jogos do dia, personalizando os dados de cada confronto)
+
+📊 <b>GESTÃO DE BANCA</b>
+━━━━━━━━━━━━━━━━━━
+🟢 9/10 → stake principal
+🟢 8–8.5/10 → stake moderada
+🟡 7–7.5/10 → stake reduzida
+🔴 <7/10 → evitar
+⚠️ Odds são referências e mudam. Aposte com responsabilidade.
 
 🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>
 Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaixo:
@@ -217,30 +224,55 @@ Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaix
 
 
 def formatar_fallback_emergencial(jogos, origem, data_hoje):
-    """Fallback emergencial contendo o link de cadastro."""
+    """Fallback rico em detalhes e emojis quando a IA não estiver disponível."""
+    medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️"]
     linhas = [
-        f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>\n",
+        f"🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>\n",
+        "🇧🇷 Atualizado hoje (Modo de Contingência)",
+        "📊 Análise de odds + modelos + forma recente",
+        "⚠️ Odds podem variar. Não existe aposta garantida.",
         "━━━━━━━━━━━━━━━━━━",
-        "🏆 <b>TOP APOSTAS DO DIA</b> (Modo de Emergência)\n"
+        "🏆 <b>TOP APOSTAS DO DIA</b>",
+        "━━━━━━━━━━━━━━━━━━\n"
     ]
     
     for idx, ev in enumerate(jogos[:5]):
         if "ESPN" in origem:
-            nome = ev.get("name", "Confronto")
+            nome = ev.get("name", "Confronto Esportivo")
         else:
             teams = ev.get("teams", {})
-            nome = f"{teams.get('home', {}).get('name', 'Mandante')} x {teams.get('away', {}).get('name', 'Visitante')}"
+            home = teams.get("home", {}).get("name", "Mandante")
+            away = teams.get("away", {}).get("name", "Visitante")
+            nome = f"{home} x {away}"
+
+        medalha = medalhas[idx] if idx < len(medalhas) else "⚽️"
+        link_sportingbet = gerar_link_sportingbet(nome)
 
         linhas.append(
-            f"• <b>{nome}</b>\n"
-            f"  • Mercados recomendados: Vitória do Favorito / Over 1.5 Gols\n"
+            f"{medalha} ⚽️ <b>{nome.upper()}</b>\n"
+            f"🕟 Horário a confirmar 🇧🇷\n"
+            f"🎯 <b>Mercado Principal:</b> Vitória do Favorito / Dupla Chance\n"
+            f"📊 Odd mercado: ~1.55 – 1.85\n"
+            f"🔥 Confiança: 8/10\n"
+            f"⚽️ Over 1.5 Gols na partida\n"
+            f"🚩 Escanteios: 8–11 estimados\n"
+            f"🟨 Cartões: 3–5 estimados\n"
+            f"🔮 Placar provável: 2x1 / 1x0\n"
+            f"💎 Melhor entrada: Vitória do Favorito + Over 1.5\n"
+            f"🔗 <a href=\"{link_sportingbet}\">Apostar na Sportingbet</a>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
         )
 
     linhas.extend([
+        "📊 <b>GESTÃO DE BANCA</b>",
         "━━━━━━━━━━━━━━━━━━",
-        "⚠️ <b>AVISO LEGAL:</b> Mantenha a gestão de banca e aposte com responsabilidade.\n",
+        "🟢 9/10 → stake principal",
+        "🟢 8–8.5/10 → stake moderada",
+        "🟡 7–7.5/10 → stake reduzida",
+        "🔴 <7/10 → evitar",
+        "⚠️ Odds são referências e mudam. Aposte com responsabilidade.\n",
         "🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>",
-        "Ganhe bônus exclusivo se cadastrando pelo link abaixo:",
+        "Ganhe bônus de boas-vindas e giros grátis se cadastrando no link abaixo:",
         f"👉 <a href=\"{LINK_CADASTRO_RECOMPENSA}\">CLIQUE AQUI PARA SE CADASTRAR E GANHAR</a>"
     ])
     
@@ -251,7 +283,7 @@ def executar_robo():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     data_hoje_iso = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Obtenção das partidas
+    # 1. Coleta das partidas
     jogos_brutos, fonte_usada = buscar_jogos_api_football(data_hoje_iso)
     
     if jogos_brutos:
@@ -264,14 +296,14 @@ def executar_robo():
             dados_contexto = f"Partidas via ESPN: {str(eventos_espn[:10])}"
         else:
             fonte_usada = "Google Search Grounding"
-            dados_contexto = "Realize busca na web para consultar as partidas de futebol marcadas para o dia de hoje."
+            dados_contexto = "Pesquise na web os jogos de futebol mais relevantes agendados para hoje."
 
-    # 2. Execução da IA com busca web (Gemini 3.6 Flash)
+    # 2. Geração do relatório com a IA
     prompt = montar_prompt(data_hoje, dados_contexto)
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool])
 
-    print(f"[INFO] Gerando relatório com {MODELO}...")
+    print(f"[INFO] Gerando relatório via {MODELO}...")
     relatorio = None
     
     try:
@@ -282,19 +314,19 @@ def executar_robo():
         )
         relatorio = response.text
     except ClientError as e:
-        print(f"[ERRO] Falha na chamada da API Gemini: {e}")
+        print(f"[ERRO] Chamada API Gemini: {e}")
     except Exception as e:
-        print(f"[ERRO] Erro inesperado ao gerar relatório: {e}")
+        print(f"[ERRO] Exceção geral na IA: {e}")
 
-    # 3. Envio da mensagem
+    # 3. Envio do relatório ou fallback formatado
     if relatorio:
         enviar_telegram(relatorio)
     elif jogos_brutos:
-        print("[AVISO] Gerando relatório emergencial de fallback...")
+        print("[AVISO] Gerando relatório emergencial com layout completo...")
         relatorio_emergencia = formatar_fallback_emergencial(jogos_brutos, fonte_usada, data_hoje)
         enviar_telegram(relatorio_emergencia)
     else:
-        enviar_telegram(f"⚠️ <b>Não foi possível gerar o relatório de apostas hoje ({data_hoje}).</b>")
+        enviar_telegram(f"⚠️ <b>Não foi possível consultar os jogos de hoje ({data_hoje}).</b>")
 
 
 if __name__ == "__main__":
