@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.8
-- Filtro de fuso horário UTC -> BRT (elimina jogos da madrugada/dia anterior)
-- Priorização de grandes ligas de futebol
-- Fallback emergencial dinâmico e inteligente
-- Envio formatado em HTML com links para a Sportingbet e Cadastro com Recompensa
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.9
+- Filtro estrito de horário: Apenas jogos a partir das 10:00 BRT
+- Whitelist de Grandes Ligas: Priorização automática de campeonatos relevantes
+- Tratamento de cota do Gemini (429) com Fallback Dinâmico e HTML seguro
+- Links direcionados para a Sportingbet e Cadastro com Recompensa
 """
 
 from datetime import datetime, timedelta
@@ -33,6 +33,23 @@ LINK_CADASTRO_RECOMPENSA = obter_env(
 
 MODELO = "gemini-3.6-flash"
 
+# Whitelist de palavras-chave para filtrar apenas grandes campeonatos
+LIGAS_RELEVANTES_KEYWORDS = [
+    "brazil", "brasileiro", "brasileirã", "copa do brasil",
+    "england", "premier league", "championship",
+    "spain", "la liga", "laliga",
+    "italy", "serie a",
+    "germany", "bundesliga",
+    "france", "ligue 1",
+    "libertadores", "sudamericana", "sul-americana", 
+    "champions league", "europa league", "conference league",
+    "argentina", "liga profesional",
+    "portugal", "primeira liga",
+    "mexico", "liga mx",
+    "usa", "mls", "major league",
+    "saudi", "pro league"
+]
+
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -46,12 +63,18 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def converter_utc_para_brt(data_utc_str: str):
-    """Converte string ISO em UTC para objeto datetime no fuso de Brasília (UTC-3)."""
+    """Converte string ISO em UTC para datetime no fuso de Brasília (UTC-3)."""
     try:
         dt_utc = datetime.fromisoformat(data_utc_str.replace("Z", "+00:00"))
         return dt_utc - timedelta(hours=3)
     except Exception:
         return None
+
+
+def eh_liga_relevante(nome_liga: str, pais: str = "") -> bool:
+    """Verifica se a liga ou o país pertencem às grandes competições."""
+    texto = f"{nome_liga} {pais}".lower()
+    return any(kw in texto for kw in LIGAS_RELEVANTES_KEYWORDS)
 
 
 def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
@@ -136,12 +159,22 @@ def buscar_jogos_api_football(data_hoje_iso: str):
                     for item in dados:
                         date_utc = item.get("fixture", {}).get("date", "")
                         dt_brt = converter_utc_para_brt(date_utc)
-                        # Filtra apenas jogos que ocorrem hoje em BRT e a partir das 08:00 BRT
-                        if dt_brt and dt_brt.strftime("%Y-%m-%d") == data_hoje_iso and dt_brt.hour >= 8:
+                        
+                        # Filtro de fuso horário BRT e limite de horário >= 10:00 BRT
+                        if dt_brt and dt_brt.strftime("%Y-%m-%d") == data_hoje_iso and dt_brt.hour >= 10:
+                            league_info = item.get("league", {})
+                            nome_liga = league_info.get("name", "")
+                            pais_liga = league_info.get("country", "")
+                            
                             item["hora_brt"] = dt_brt.strftime("%H:%M")
+                            item["dt_brt"] = dt_brt
+                            item["relevante"] = eh_liga_relevante(nome_liga, pais_liga)
                             jogos_filtrados.append(item)
+
                     if jogos_filtrados:
-                        print(f"[OK] Encontrados {len(jogos_filtrados)} jogos válidos via {nome}.")
+                        # Ordena: Primeiro ligas relevantes, depois por horário do jogo
+                        jogos_filtrados.sort(key=lambda x: (not x.get("relevante", False), x.get("dt_brt")))
+                        print(f"[OK] Encontrados {len(jogos_filtrados)} jogos a partir das 10h BRT via {nome}.")
                         return jogos_filtrados, nome
             except Exception as e:
                 print(f"[ERRO] Falha {nome}: {e}")
@@ -159,11 +192,16 @@ def buscar_jogos_espn(data_hoje_iso: str):
             for ev in eventos:
                 date_utc = ev.get("date", "")
                 dt_brt = converter_utc_para_brt(date_utc)
-                # Garante fuso horário BRT e remove jogos da madrugada
-                if dt_brt and dt_brt.strftime("%Y-%m-%d") == data_hoje_iso and dt_brt.hour >= 8:
+                
+                if dt_brt and dt_brt.strftime("%Y-%m-%d") == data_hoje_iso and dt_brt.hour >= 10:
+                    nome_liga = ev.get("season", {}).get("slug", "") or ev.get("name", "")
                     ev["hora_brt"] = dt_brt.strftime("%H:%M")
+                    ev["dt_brt"] = dt_brt
+                    ev["relevante"] = eh_liga_relevante(nome_liga)
                     eventos_filtrados.append(ev)
-            print(f"[OK] ESPN retornou {len(eventos_filtrados)} eventos válidos para hoje.")
+
+            eventos_filtrados.sort(key=lambda x: (not x.get("relevante", False), x.get("dt_brt")))
+            print(f"[OK] ESPN retornou {len(eventos_filtrados)} eventos válidos para hoje a partir das 10h.")
             return eventos_filtrados
     except Exception as e:
         print(f"[ERRO] ESPN: {e}")
@@ -178,15 +216,15 @@ def gerar_link_sportingbet(nome_confronto: str) -> str:
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
     return f"""
 Você é um analista profissional de apostas esportivas.
-Sua missão é selecionar os PRINCIPAIS JOGOS DE HOJE ({data_hoje}) das grandes ligas (Brasileirão, Champions League, Premier League, La Liga, Serie A, Ligue 1, Libertadores, Sul-Americana, etc.).
-Descarte jogos da madrugada (entre 00:00 e 07:00).
+Sua missão é selecionar os PRINCIPAIS JOGOS DE HOJE ({data_hoje}) que começam A PARTIR DAS 10:00 (Horário de Brasília) e pertencem a GRANDES LIGAS (Brasileirão, Champions League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Libertadores, Sul-Americana, MLS, etc.).
+DESCARTE completamente ligas secundárias/desconhecidas e jogos ocorridos antes das 10:00 BRT.
 
 DADOS DOS JOGOS DISPONÍVEIS:
 {dados_jogos_str}
 
 REGRAS ESTRITAS DE FORMATO:
 1. Analise cada jogo trazendo palpite de Vencedor/Mercado, Odd estimada, Nível de Confiança, Escanteios, Cartões e Placar Provável.
-2. Para CADA jogo, você DEVE colocar o link da Sportingbet no formato: `<a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>`.
+2. Para CADA jogo, coloque o link da Sportingbet no formato: `<a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>`.
 3. Siga EXATAMENTE a estrutura visual HTML abaixo:
 
 🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>
@@ -281,7 +319,12 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
         "━━━━━━━━━━━━━━━━━━\n"
     ]
     
-    for idx, ev in enumerate(jogos[:6]):
+    # Filtra apenas jogos de ligas relevantes para o fallback emergencial
+    jogos_exibir = [j for j in jogos if j.get("relevante", False)]
+    if not jogos_exibir:
+        jogos_exibir = jogos
+
+    for idx, ev in enumerate(jogos_exibir[:6]):
         if "ESPN" in origem:
             nome = ev.get("name", "Confronto Esportivo")
             hora_str = f"{ev.get('hora_brt', '16:00')} BRT"
@@ -335,16 +378,16 @@ def executar_robo():
     jogos_brutos, fonte_usada = buscar_jogos_api_football(data_hoje_iso)
     
     if jogos_brutos:
-        dados_contexto = f"Partidas via {fonte_usada}: {str(jogos_brutos[:10])}"
+        dados_contexto = f"Partidas via {fonte_usada}: {str(jogos_brutos[:15])}"
     else:
         eventos_espn = buscar_jogos_espn(data_hoje_iso)
         if eventos_espn:
             fonte_usada = "ESPN Public API"
             jogos_brutos = eventos_espn
-            dados_contexto = f"Partidas via ESPN: {str(eventos_espn[:10])}"
+            dados_contexto = f"Partidas via ESPN: {str(eventos_espn[:15])}"
         else:
             fonte_usada = "Google Search Grounding"
-            dados_contexto = f"Pesquise os principais jogos de futebol de grandes ligas para hoje ({data_hoje})."
+            dados_contexto = f"Pesquise os principais jogos de futebol das grandes ligas para hoje ({data_hoje}) a partir das 10h BRT."
 
     # 2. Geração via IA Gemini
     prompt = montar_prompt(data_hoje, dados_contexto)
@@ -370,7 +413,7 @@ def executar_robo():
     if relatorio:
         enviar_telegram(relatorio)
     elif jogos_brutos:
-        print("[AVISO] Gerando relatório emergencial com horários e ligas corrigidas...")
+        print("[AVISO] Gerando relatório emergencial com ligas principais e horários ajustados...")
         relatorio_emergencia = formatar_fallback_emergencial(jogos_brutos, fonte_usada, data_hoje)
         enviar_telegram(relatorio_emergencia)
     else:
