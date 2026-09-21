@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS
-- Integração com Gemini API + Google Search Grounding
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.3
+- Proteção contra bloqueio HTTP 403 (Headers de Navegador Completo)
+- Integração com Gemini API (gemini-2.5-flash) + Google Search Grounding
 - Fallback para API-Football e ESPN Public API
-- Inclusão automatizada de links da Sportingbet
-- Envio direto para Telegram com suporte a HTML
+- Link de cadastro personalizado com recompensa ao final das mensagens
 """
 
 from datetime import datetime
+import html
 import os
 import time
 import requests
@@ -22,21 +23,36 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
 API_FOOTBALL_KEY_2 = os.environ.get("API_FOOTBALL_KEY_2")
 
+# Link de indicação/cadastro com recompensa (Pode ser configurado nas Secrets do GitHub)
+LINK_CADASTRO_RECOMPENSA = os.environ.get(
+    "LINK_CADASTRO_RECOMPENSA", 
+    "https://seu-link-de-afiliado-aqui.com/cadastre-se"  # <-- Substitua pelo seu novo link se preferir deixar fixo
+)
+
 MODELO = "gemini-2.5-flash"
 
-# Cabeçalho padrão para evitar o bloqueio HTTP 403 em APIs públicas
-HEADERS_HTTP = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+# Session com Headers anti-bloqueio (Evita HTTP 403 no GitHub Actions)
+SESSION = requests.Session()
+SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
-}
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.espn.com.br/",
+    "Origin": "https://www.espn.com.br",
+    "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site"
+})
 
 # Inicialização do cliente Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
-    """Divide mensagens longas em blocos para respeitar os limites do Telegram sem quebrar a sintaxe."""
+    """Divide mensagens respeitando blocos para não quebrar a sintaxe do Telegram."""
     partes, atual = [], ""
     for bloco in texto.split("\n\n"):
         candidato = f"{atual}\n\n{bloco}" if atual else bloco
@@ -69,7 +85,7 @@ def enviar_telegram(texto: str) -> bool:
             "disable_web_page_preview": True
         }
         try:
-            resposta = requests.post(url, json=payload, timeout=15)
+            resposta = SESSION.post(url, json=payload, timeout=15)
             if resposta.status_code == 200:
                 print(f"[OK] Parte {n}/{len(partes)} enviada para o Telegram!")
             else:
@@ -83,13 +99,13 @@ def enviar_telegram(texto: str) -> bool:
 
 
 def verificar_status_api_football(api_key: str) -> bool:
-    """Valida se a chave da API-Football possui requisições disponíveis para o dia."""
+    """Valida cota disponível na API-Football."""
     if not api_key:
         return False
     url = "https://v3.football.api-sports.io/status"
-    headers = {"x-apisports-key": api_key, **HEADERS_HTTP}
+    headers = {"x-apisports-key": api_key}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = SESSION.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             resp_data = data.get("response", {})
@@ -105,7 +121,7 @@ def verificar_status_api_football(api_key: str) -> bool:
 
 
 def buscar_jogos_api_football(data_hoje_iso: str):
-    """Tenta buscar partidas via API-Football (Principal e Secundária)."""
+    """Busca partidas via API-Football."""
     chaves = [
         ("API Principal", API_FOOTBALL_KEY),
         ("API Secundária", API_FOOTBALL_KEY_2)
@@ -117,9 +133,9 @@ def buscar_jogos_api_football(data_hoje_iso: str):
         if verificar_status_api_football(chave):
             print(f"[INFO] Buscando partidas ({data_hoje_iso}) via {nome}...")
             url = f"https://v3.football.api-sports.io/fixtures?date={data_hoje_iso}"
-            headers = {"x-apisports-key": chave, **HEADERS_HTTP}
+            headers = {"x-apisports-key": chave}
             try:
-                resp = requests.get(url, headers=headers, timeout=15)
+                resp = SESSION.get(url, headers=headers, timeout=15)
                 if resp.status_code == 200:
                     dados = resp.json().get("response", [])
                     if dados:
@@ -131,22 +147,24 @@ def buscar_jogos_api_football(data_hoje_iso: str):
 
 
 def buscar_jogos_espn():
-    """Busca jogos do dia via endpoint global público da ESPN."""
+    """Busca jogos via endpoint da ESPN utilizando headers protegidos."""
     print("[INFO] Consultando partidas via feed público da ESPN...")
     url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
     try:
-        resp = requests.get(url, headers=HEADERS_HTTP, timeout=15)
+        resp = SESSION.get(url, timeout=15)
         if resp.status_code == 200:
             eventos = resp.json().get("events", [])
             print(f"[OK] ESPN retornou {len(eventos)} eventos.")
             return eventos
+        else:
+            print(f"[AVISO] ESPN respondeu com status {resp.status_code}")
     except Exception as e:
         print(f"[ERRO] Falha ao consultar ESPN: {e}")
     return []
 
 
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
-    """Gera a instrução do prompt para a Inteligência Artificial com regras estritas para a Sportingbet."""
+    """Gera a instrução do prompt incluindo o novo link de cadastro com recompensa."""
     return f"""
 Você é um sistema automatizado de análise profissional de apostas esportivas.
 Com base nos dados fornecidos abaixo para a data de hoje ({data_hoje}, fuso de Brasília, UTC-3), produza um relatório de apostas de altíssimo nível para o Telegram.
@@ -155,9 +173,9 @@ DADOS DOS JOGOS DISPONÍVEIS:
 {dados_jogos_str}
 
 REGRAS OBRIGATÓRIAS:
-1. Use APENAS os jogos presentes nos dados acima ou confirmados via busca oficial. NUNCA invente confrontos.
-2. Para CADA jogo analisado, você DEVE buscar e incluir o link direto da partida no site da Sportingbet. Se não encontrar o link exato do jogo, inclua o link da página de futebol da Sportingbet (ex: https://sports.sportingbet.br/pt-br/sports/futebol-4).
-3. Utilize estritamente a estrutura visual HTML abaixo sem modificar as tags.
+1. Use APENAS jogos reais dos dados fornecidos ou confirmados via busca web.
+2. Para cada jogo analisado, você DEVE buscar e incluir o link direto da partida na casa de apostas (ex: Sportingbet ou equivalente).
+3. Utilize estritamente a estrutura visual HTML abaixo sem alterar as marcas.
 
 ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA TELEGRAM (HTML):
 
@@ -170,7 +188,7 @@ ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA TELEGRAM (HTML):
   • Provável vencedor: [Seleção / Tendência]
   • Odd estimada: [Valor da Odd]
   • Projeção estatística: [Gols / Escanteios / Cartões]
-  • 🔗 <a href="[LINK_SPORTINGBET]">Apostar na Sportingbet</a>
+  • 🔗 <a href="[LINK_PARTIDA]">Apostar no Jogo</a>
 
 ━━━━━━━━━━━━━━━━━━
 📊 <b>DESTAQUES E PROJEÇÕES</b>
@@ -180,14 +198,14 @@ ESTRUTURA OBRIGATÓRIA DO RELATÓRIO PARA TELEGRAM (HTML):
 ⚠️ <b>GESTÃO DE BANCA & AVISO LEGAL</b>
 Mantenha rigor na gestão de banca e controle de stakes. Nenhuma aposta é 100% garantida; odds e estatísticas acima vêm de fontes públicas e podem mudar. Aposte com responsabilidade.
 
-JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!
-Aposte para ganhar 100 GIROS GRÁTIS! Divirta-se no link abaixo:
-https://superbet.onelink.me/Hqv6/03r54ds3
+🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>
+Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaixo:
+👉 <a href="{LINK_CADASTRO_RECOMPENSA}">CLIQUE AQUI PARA SE CADASTRAR E GANHAR</a>
 """
 
 
 def formatar_fallback_emergencial(jogos, origem, data_hoje):
-    """Gera um relatório simplificado de emergência caso a API do Gemini falhe por cota."""
+    """Fallback emergencial contendo o novo link de cadastro."""
     linhas = [
         f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS — {data_hoje}</b>\n",
         "━━━━━━━━━━━━━━━━━━",
@@ -204,14 +222,14 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
         linhas.append(
             f"• <b>{nome}</b>\n"
             f"  • Mercados recomendados: Vitória do Favorito / Over 1.5 Gols\n"
-            f"  • 🔗 <a href=\"https://sports.sportingbet.br/pt-br/sports/futebol-4\">Apostar na Sportingbet</a>\n"
         )
 
     linhas.extend([
         "━━━━━━━━━━━━━━━━━━",
         "⚠️ <b>AVISO LEGAL:</b> Mantenha a gestão de banca e aposte com responsabilidade.\n",
-        "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!",
-        "https://superbet.onelink.me/Hqv6/03r54ds3"
+        "🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>",
+        "Ganhe bônus exclusivo se cadastrando pelo link abaixo:",
+        f"👉 <a href=\"{LINK_CADASTRO_RECOMPENSA}\">CLIQUE AQUI PARA SE CADASTRAR E GANHAR</a>"
     ])
     
     return "\n".join(linhas)
@@ -221,7 +239,7 @@ def executar_robo():
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     data_hoje_iso = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Obtenção das partidas do dia
+    # 1. Obtenção das partidas
     jogos_brutos, fonte_usada = buscar_jogos_api_football(data_hoje_iso)
     
     if jogos_brutos:
@@ -236,12 +254,12 @@ def executar_robo():
             fonte_usada = "Google Search Grounding"
             dados_contexto = "Realize busca na web para consultar as partidas de futebol marcadas para o dia de hoje."
 
-    # 2. Construção e execução do modelo Gemini com ferramentas de busca
+    # 2. Execução da IA com busca web
     prompt = montar_prompt(data_hoje, dados_contexto)
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool])
 
-    print(f"[INFO] Gerando relatório com o modelo {MODELO}...")
+    print(f"[INFO] Gerando relatório com {MODELO}...")
     relatorio = None
     
     try:
@@ -252,15 +270,15 @@ def executar_robo():
         )
         relatorio = response.text
     except ClientError as e:
-        print(f"[ERRO] Falha na chamada da API Gemini (Cota/Conexão): {e}")
+        print(f"[ERRO] Falha na chamada da API Gemini: {e}")
     except Exception as e:
         print(f"[ERRO] Erro inesperado ao gerar relatório: {e}")
 
-    # 3. Tratamento e envio do resultado
+    # 3. Envio da mensagem
     if relatorio:
         enviar_telegram(relatorio)
     elif jogos_brutos:
-        print("[AVISO] Utilizando relatório de emergência (fallback)...")
+        print("[AVISO] Gerando relatório emergencial de fallback...")
         relatorio_emergencia = formatar_fallback_emergencial(jogos_brutos, fonte_usada, data_hoje)
         enviar_telegram(relatorio_emergencia)
     else:
