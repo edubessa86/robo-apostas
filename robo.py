@@ -1,18 +1,39 @@
 # -*- coding: utf-8 -*-
 """
 RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V5.1 (Mercados Enxutos)
+
+Correções desta versão:
+- REMOVIDO o "fallback de testes" que reenviava sempre os mesmos 4 jogos fixos
+  (Millwall x West Ham, Brighton x Arsenal, Roma x Inter, São Paulo x Internacional)
+  quando a API falhava ou não retornava jogos. Era a causa do relatório repetido.
+- Falhas na API agora aparecem no log (antes eram engolidas por `except: pass`).
+- Se a fonte de dados cair por completo, NADA é enviado e o script sai com erro
+  (o GitHub Actions marca a execução como falha e avisa você).
+- Dia sem jogos: envia um aviso curto (configurável) em vez de jogos inventados.
+- Só entram jogos de HOJE (fuso BRT) e ainda não iniciados.
+- A data do título e a data da busca vêm da mesma variável.
+- Quebra de mensagem do Telegram respeita blocos (não corta tags HTML no meio).
+- "Enviado com sucesso" só é impresso se o Telegram realmente aceitou.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import html
 import math
 import os
 import random
+import sys
+import time
 import requests
 
 # CONFIGURAÇÕES DE AMBIENTE
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# "1" = envia aviso curto quando não há jogos no dia | "0" = fica em silêncio
+AVISO_SEM_JOGOS = os.environ.get("AVISO_SEM_JOGOS", "1") == "1"
+
+# True = ignora jogos já iniciados ou finalizados (o relatório é de projeções)
+SOMENTE_NAO_INICIADOS = True
 
 BRT = timezone(timedelta(hours=-3))
 
@@ -28,15 +49,38 @@ LIGAS_MONITORADAS = {
     "uefa.champions": "Champions League"
 }
 
+# A ESPN pode agrupar os jogos por dia em outro fuso horário. Por isso buscamos
+# ontem/hoje/amanhã e depois filtramos rigorosamente pela data em BRT.
+JANELA_DIAS = (-1, 0, 1)
+
 HTTP_TIMEOUT = 10
+HTTP_TENTATIVAS = 3
 SESSION = requests.Session()
 SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FootballBot/5.1"
 })
 
-def dividir_mensagem(texto, limite=3900):
-    """Divide textos longos em pedaços menores para respeitar o limite de caracteres do Telegram."""
-    return [texto[i:i + limite] for i in range(0, len(texto), limite)]
+
+class FalhaNaFonteDeDados(Exception):
+    """Levantada quando nenhuma liga respondeu (API fora do ar, bloqueio, etc.)."""
+
+
+def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
+    """Divide o texto em partes respeitando blocos (separados por linha em branco),
+    para não cortar tags HTML no meio e não quebrar o parse do Telegram."""
+    partes, atual = [], ""
+    for bloco in texto.split("\n\n"):
+        candidato = f"{atual}\n\n{bloco}" if atual else bloco
+        if len(candidato) <= limite:
+            atual = candidato
+        else:
+            if atual:
+                partes.append(atual)
+            atual = bloco
+    if atual:
+        partes.append(atual)
+    return partes
+
 
 def poisson_pmf(k: int, lam: float) -> float:
     if lam <= 0: lam = 0.05
@@ -98,75 +142,118 @@ def projetar_partida(time_casa: str, time_fora: str) -> dict:
         "chutes_gol": f"Total: {cg_c + cg_f} (C: {cg_c} | F: {cg_f})"
     }
 
-def buscar_todos_os_jogos() -> list[dict]:
-    hoje_brt = datetime.now(BRT)
-    datas_busca = [hoje_brt.strftime("%Y%m%d")]
-    
-    jogos = []
-    ids_vistos = set()
+
+def _get_json(url: str) -> dict:
+    """GET com retentativas para erros temporários. Levanta RuntimeError se falhar."""
+    ultimo_erro = "erro desconhecido"
+    for tentativa in range(1, HTTP_TENTATIVAS + 1):
+        try:
+            r = SESSION.get(url, timeout=HTTP_TIMEOUT)
+            if r.status_code == 200:
+                return r.json()
+            ultimo_erro = f"HTTP {r.status_code}"
+            # 4xx (exceto 429) não adianta repetir
+            if r.status_code < 500 and r.status_code != 429:
+                break
+        except (requests.RequestException, ValueError) as e:
+            ultimo_erro = type(e).__name__
+        if tentativa < HTTP_TENTATIVAS:
+            time.sleep(1.5 * tentativa)
+    raise RuntimeError(ultimo_erro)
+
+
+def _parse_data_espn(texto: str) -> datetime:
+    """A ESPN devolve datas como '2026-09-20T15:00Z' (às vezes com segundos)."""
+    texto = texto.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(texto)
+    except ValueError:
+        return datetime.strptime(texto, "%Y-%m-%dT%H:%M%z")
+
+
+def _extrair_jogo(ev: dict, liga_nome: str, hoje: date) -> dict | None:
+    """Converte um evento da ESPN em jogo. Retorna None se não for jogo de hoje."""
+    ev_id = str(ev.get("id", ""))
+    dt_str = ev.get("date", "")
+    if not ev_id or not dt_str:
+        return None
+
+    dt_jogo_brt = _parse_data_espn(dt_str).astimezone(BRT)
+    if dt_jogo_brt.date() != hoje:
+        return None
+
+    estado = ev.get("status", {}).get("type", {}).get("state", "pre")
+    if SOMENTE_NAO_INICIADOS and estado != "pre":
+        return None
+
+    comps = ev.get("competitions", [])
+    if not comps:
+        return None
+    competitors = comps[0].get("competitors", [])
+    if len(competitors) < 2:
+        return None
+
+    casa = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+    fora = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+    nome_casa = casa.get("team", {}).get("displayName", "Casa")
+    nome_fora = fora.get("team", {}).get("displayName", "Fora")
+
+    return {
+        "id": ev_id,
+        "partida": f"{nome_casa} x {nome_fora}",
+        "liga": liga_nome,
+        "inicio": dt_jogo_brt,
+        "horario": dt_jogo_brt.strftime("%H:%M"),
+        "projecao": projetar_partida(nome_casa, nome_fora)
+    }
+
+
+def buscar_todos_os_jogos(hoje: date) -> list[dict]:
+    """Busca os jogos de `hoje` (data em BRT).
+    - Retorna lista vazia se a API respondeu mas não há jogos.
+    - Levanta FalhaNaFonteDeDados se NENHUMA liga respondeu."""
+    datas_busca = [(hoje + timedelta(days=d)).strftime("%Y%m%d") for d in JANELA_DIAS]
+
+    jogos: list[dict] = []
+    ids_vistos: set[str] = set()
+    ligas_sem_resposta: list[str] = []
 
     for liga_code, liga_nome in LIGAS_MONITORADAS.items():
+        respostas_ok = 0
         for data_str in datas_busca:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga_code}/scoreboard?dates={data_str}"
             try:
-                r = SESSION.get(url, timeout=HTTP_TIMEOUT)
-                if r.status_code != 200: continue
-                    
-                dados = r.json()
-                for ev in dados.get("events", []):
-                    ev_id = str(ev.get("id", ""))
-                    if not ev_id or ev_id in ids_vistos: continue
+                dados = _get_json(url)
+                respostas_ok += 1
+            except RuntimeError as e:
+                print(f"[AVISO] Falha ao buscar {liga_code} ({data_str}): {e}")
+                continue
 
-                    dt_utc_str = ev.get("date", "")
-                    if not dt_utc_str: continue
+            for ev in dados.get("events", []):
+                try:
+                    jogo = _extrair_jogo(ev, liga_nome, hoje)
+                except Exception as e:
+                    print(f"[AVISO] Evento ignorado em {liga_code}: {type(e).__name__}: {e}")
+                    continue
+                if jogo is None or jogo["id"] in ids_vistos:
+                    continue
+                ids_vistos.add(jogo["id"])
+                jogos.append(jogo)
 
-                    dt_utc = datetime.fromisoformat(dt_utc_str.replace("Z", "+00:00"))
-                    dt_jogo_brt = dt_utc.astimezone(BRT)
-                    
-                    if dt_jogo_brt.date() != hoje_brt.date(): continue
+        if respostas_ok == 0:
+            ligas_sem_resposta.append(liga_code)
 
-                    comps = ev.get("competitions", [])
-                    if not comps: continue
-                        
-                    competitors = comps[0].get("competitors", [])
-                    if len(competitors) < 2: continue
+    if len(ligas_sem_resposta) == len(LIGAS_MONITORADAS):
+        raise FalhaNaFonteDeDados("nenhuma liga respondeu (API fora do ar, bloqueio de IP ou erro de rede)")
+    if ligas_sem_resposta:
+        print(f"[AVISO] Ligas sem resposta (relatório parcial): {', '.join(ligas_sem_resposta)}")
 
-                    casa = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-                    fora = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
-
-                    nome_casa = casa.get("team", {}).get("displayName", "Casa")
-                    nome_fora = fora.get("team", {}).get("displayName", "Fora")
-
-                    ids_vistos.add(ev_id)
-                    jogos.append({
-                        "id": ev_id,
-                        "partida": f"{nome_casa} x {nome_fora}",
-                        "liga": liga_nome,
-                        "horario": dt_jogo_brt.strftime("%H:%M"),
-                        "projecao": projetar_partida(nome_casa, nome_fora)
-                    })
-            except Exception:
-                pass
-
-    if not jogos:
-        print("[AVISO] API sem jogos. Injetando fallback de testes...")
-        fallback_data = [
-            ("m1", "Millwall", "West Ham", "Championship (2ª Inglesa)", "08:30"),
-            ("m2", "Brighton", "Arsenal", "Campeonato Inglês", "11:00"),
-            ("m3", "Roma", "Inter de Milão", "Campeonato Italiano", "13:00"),
-            ("m4", "São Paulo", "Internacional", "Brasileirão Série A", "21:00")
-        ]
-        for j_id, casa, fora, liga, horario in fallback_data:
-            jogos.append({
-                "id": j_id, "partida": f"{casa} x {fora}", "liga": liga,
-                "horario": horario, "projecao": projetar_partida(casa, fora)
-            })
-
-    jogos.sort(key=lambda x: x["horario"])
+    jogos.sort(key=lambda j: j["inicio"])
     return jogos
 
-def montar_relatorio(jogos: list[dict]) -> str:
-    data = datetime.now(BRT).strftime("%d/%m/%Y")
+
+def montar_relatorio(jogos: list[dict], hoje: date) -> str:
+    data = hoje.strftime("%d/%m/%Y")
     
     msg = (
         f"⚽ <b>RELATÓRIO DE PROJEÇÕES V5.1 — {data}</b>\n"
@@ -202,15 +289,26 @@ def montar_relatorio(jogos: list[dict]) -> str:
     )
     return msg
 
-def enviar_telegram(texto: str) -> None:
+
+def montar_aviso_sem_jogos(hoje: date) -> str:
+    return (
+        f"⚽ <b>RELATÓRIO DE PROJEÇÕES V5.1 — {hoje.strftime('%d/%m/%Y')}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Hoje não há jogos das ligas monitoradas. Volto amanhã com novas projeções."
+    )
+
+
+def enviar_telegram(texto: str) -> bool:
+    """Envia o texto ao Telegram. Retorna True somente se TODAS as partes foram aceitas."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Erro: Chaves do Telegram não configuradas no GitHub.")
-        return
-        
+        print("[ERRO] Chaves do Telegram não configuradas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID).")
+        return False
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     partes = dividir_mensagem(texto)
-    
-    for parte in partes:
+    tudo_ok = True
+
+    for n, parte in enumerate(partes, 1):
         payload = {
             "chat_id": CHAT_ID,
             "text": parte,
@@ -218,16 +316,44 @@ def enviar_telegram(texto: str) -> None:
             "disable_web_page_preview": True
         }
         try:
-            SESSION.post(url, json=payload, timeout=HTTP_TIMEOUT)
-        except requests.RequestException:
-            pass
+            r = SESSION.post(url, json=payload, timeout=HTTP_TIMEOUT)
+            if not r.ok:
+                print(f"[ERRO] Telegram recusou a parte {n}/{len(partes)}: HTTP {r.status_code} — {r.text[:200]}")
+                tudo_ok = False
+        except requests.RequestException as e:
+            # Só o nome do erro: a mensagem completa pode conter a URL com o token.
+            print(f"[ERRO] Falha de rede ao enviar a parte {n}/{len(partes)}: {type(e).__name__}")
+            tudo_ok = False
 
-def main() -> None:
-    print("Buscando jogos e gerando projeções...")
-    jogos = buscar_todos_os_jogos()
-    relatorio = montar_relatorio(jogos)
-    enviar_telegram(relatorio)
-    print("Relatório enviado com sucesso!")
+    return tudo_ok
+
+
+def main() -> int:
+    hoje = datetime.now(BRT).date()
+    print(f"[INFO] Buscando jogos de {hoje.strftime('%d/%m/%Y')} (BRT)...")
+
+    try:
+        jogos = buscar_todos_os_jogos(hoje)
+    except FalhaNaFonteDeDados as e:
+        print(f"[ERRO] {e}. Nenhum relatório foi enviado.")
+        return 1
+
+    if not jogos:
+        print("[INFO] Nenhum jogo hoje nas ligas monitoradas.")
+        if AVISO_SEM_JOGOS:
+            enviar_telegram(montar_aviso_sem_jogos(hoje))
+        return 0
+
+    print(f"[INFO] {len(jogos)} jogo(s) encontrado(s). Gerando projeções...")
+    relatorio = montar_relatorio(jogos, hoje)
+
+    if enviar_telegram(relatorio):
+        print("[OK] Relatório enviado com sucesso!")
+        return 0
+
+    print("[ERRO] O relatório NÃO foi enviado corretamente.")
+    return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
