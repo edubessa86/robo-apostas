@@ -1,128 +1,119 @@
-# app.py
-from fastapi import FastAPI, BackgroundTasks
-from datetime import datetime
 import os
 import requests
-from google import genai
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional
 
-from arbitrage_engine import calcular_surebet_1x2
-from value_engine import calcular_value_bet
-from movement_engine import analisar_movimento_odd
-
-app = FastAPI(title="Robô de Apostas V7 Engine")
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")[cite: 1]
+# Configurações de Fuso Horário e Ambiente
+BRT = timezone(timedelta(hours=-3))
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")[cite: 1]
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")[cite: 1]
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")[cite: 1]
-MODELO = "gemini-2.5-flash"[cite: 1, 4]
 
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None[cite: 4]
+def remover_margem_proporcional(odds_1x2: Dict[str, float]) -> Optional[Dict[str, float]]:
+    """Remove a margem (vig) das odds da casa sharp para encontrar a probabilidade justa."""
+    if not odds_1x2 or any(v <= 1.0 for v in odds_1x2.values()):
+        return None
+    
+    implied_probs = {k: 1.0 / v for k, v in odds_1x2.items()}
+    overround = sum(implied_probs.values())
+    
+    if overround <= 1.0:
+        return None  # Anomalia de mercado
+        
+    return {k: p / overround for k, p in implied_probs.items()}
 
-def enviar_telegram(texto: str) -> None:[cite: 4]
-    if not TELEGRAM_TOKEN or not CHAT_ID:[cite: 4]
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"[cite: 1, 4]
-    payload = {"chat_id": CHAT_ID, "text": texto, "parse_mode": "HTML"}[cite: 4]
-    try:
-        requests.post(url, json=payload, timeout=15)[cite: 4]
-    except Exception as e:
-        print(f"Erro no envio Telegram: {e}")[cite: 4]
+def analisar_oportunidades_pre_jogo(jogos_do_dia: List[Dict]) -> List[Dict]:
+    """Processa apenas partidas pré-jogo a partir das 10h com ancoragem na casa sharp."""
+    oportunidades = []
+    agora_brt = datetime.now(BRT)
 
-def consultar_gemini_interpretacao(dados_jogo: dict, oportunidades: list) -> str:
-    """O Gemini interpreta a matemática existente e elabora uma explicação de apoio."""[cite: 1]
-    if not client:
-        return "Análise tática indisponível no momento."
+    for jogo in jogos_do_dia:
+        horario_jogo = datetime.fromisoformat(jogo["start_time_iso"]).astimezone(BRT)
+        
+        # Filtro estrito: Apenas partidas que ainda NÃO começaram no dia corrente[cite: 1, 3]
+        if horario_jogo < agora_brt or horario_jogo.date() != agora_brt.date():
+            continue
 
-    prompt = f"""
-    Você é um analista quantitativo de futebol.
-    Analise a partida {dados_jogo['home_name']} x {dados_jogo['away_name']} aos {dados_jogo['elapsed']}' minutos.
-    Placar: {dados_jogo['home_goals']} x {dados_jogo['away_goals']}.
-    Estatísticas reais:
-    - Finalizações no alvo: Mandante {dados_jogo['home_sot']} | Visitante {dados_jogo['away_sot']}
-    - Posse de bola: Mandante {dados_jogo['home_possession']}% | Visitante {dados_jogo['away_possession']}%
+        # Odds da Casa Commercial (ex: Superbet) e Sharp (Pinnacle)[cite: 1, 2]
+        odds_superbet = jogo.get("odds_superbet", {})  # ex: {"Home": 2.25, "Draw": 3.40, "Away": 3.20}[cite: 1, 2]
+        odds_sharp = jogo.get("odds_sharp", {})        # ex: {"Home": 2.10, "Draw": 3.40, "Away": 3.50}
 
-    Oportunidades Matemáticas Detectadas:
-    {oportunidades}
+        fair_probs_sharp = remover_margem_proporcional(odds_sharp)
+        if not fair_probs_sharp:
+            continue
 
-    Forneça uma breve explicação técnica (máximo 3 frases) em HTML (`<b>`, `<i>`) justificando o valor tático/estatístico dessas oportunidades.
-    NÃO invente odds ou probabilidades. Utilize estritamente os dados informados.
-    """
-    try:
-        response = client.models.generate_content(model=MODELO, contents=prompt)[cite: 4]
-        return response.text
-    except Exception as e:
-        return f"<i>Análise qualitativa indisponível ({e}).</i>"
+        # Avalia se a Superbet oferece Odd maior que a Odd Fair da Sharp para o Mandante[cite: 1, 2]
+        selection = "Home"
+        odd_comercial = odds_superbet.get(selection, 0.0)[cite: 1]
+        fair_prob = fair_probs_sharp.get(selection, 0.0)
+        
+        if fair_prob > 0 and odd_comercial > 1.0:
+            fair_odd_sharp = 1.0 / fair_prob
+            edge_percent = ((odd_comercial / fair_odd_sharp) - 1.0) * 100.0
 
-def formatar_alerta_v7(dados_jogo: dict, oportunidades: list, analise_gemini: str) -> str:
+            # Exige um Edge mínimo de +3.0% em relação ao preço justo da Sharp
+            if edge_percent >= 3.0:
+                oportunidades.append({
+                    "home_team": jogo["home_team"],
+                    "away_team": jogo["away_team"],
+                    "league": jogo["league"],
+                    "horario": horario_jogo.strftime("%H:%M"),
+                    "selection": "Vitória Mandante",
+                    "odd_comercial": odd_comercial,
+                    "fair_odd_sharp": round(fair_odd_sharp, 2),
+                    "edge_percent": round(edge_percent, 2),
+                    "ev_percent": round((fair_prob * odd_comercial - 1.0) * 100, 2)
+                })
+
+    return oportunidades
+
+def formatar_relatorio_10h(oportunidades: List[Dict]) -> str:
+    data_hoje = datetime.now(BRT).strftime("%d/%m/%Y")[cite: 1]
+    
     linhas = [
-        f"🚨 <b>OPORTUNIDADE QUANTITATIVA DETECTADA</b>",
-        f"⚽ <b>{dados_jogo['home_name']} {dados_jogo['home_goals']} x {dados_jogo['away_goals']} {dados_jogo['away_name']}</b> ({dados_jogo['elapsed']}')",
-        f"━━━━━━━━━━━━━━━━━━"
+        f"⚽ <b>RELATÓRIO DIÁRIO DE APOSTAS PRÉ-JOGO — {data_hoje}</b>",[cite: 1, 2]
+        f"<i>Disparo automático das 10:00 BRT (Ancoragem Sharp)</i>\n",[cite: 1]
+        "━━━━━━━━━━━━━━━━━━"
     ]
 
-    for op in oportunidades:
-        if op["type"] == "SUREBET":
+    if not oportunidades:
+        linhas.append("⚪ <b>STATUS: PASS</b>\nNenhuma oportunidade atingiu o critério de Edge mínimo em relação à casa Sharp hoje.")[cite: 1, 2]
+    else:
+        for op in oportunidades:
             linhas.append(
-                f"🟢 <b>SUREBET DETECTADA (ROI: +{op['roi_percent']}%)</b>\n"
-                f"🏦 Distribuição R$100:\n"
-                f"  • Mandante @ {op['stakes']['Home']['odd']} -> R$ {op['stakes']['Home']['stake']}\n"
-                f"  • Empate @ {op['stakes']['Draw']['odd']} -> R$ {op['stakes']['Draw']['stake']}\n"
-                f"  • Visitante @ {op['stakes']['Away']['odd']} -> R$ {op['stakes']['Away']['stake']}\n"
-                f"💰 Lucro garantido: R$ {op['lucro_estimado']}"
+                f"🏆 <b>{op['home_team']} x {op['away_team']}</b> ({op['league']})\n"[cite: 1, 2]
+                f"⏰ Horário: {op['horario']} BRT\n"[cite: 1]
+                f"🎯 Entrada: <b>{op['selection']}</b>\n"[cite: 1]
+                f"🏦 Odd Superbet: <b>{op['odd_comercial']}</b> | Fair Odd Sharp: <b>{op['fair_odd_sharp']}</b>\n"[cite: 1, 2]
+                f"💎 Edge de Preço: <b>+{op['edge_percent']}%</b> | EV: <b>+{op['ev_percent']}%</b>\n"[cite: 2]
+                "━━━━━━━━━━━━━━━━━━"
             )
-        elif op["type"] == "VALUE_BET":
-            linhas.append(
-                f"💎 <b>VALUE BET (+EV: +{op['ev_percent']}%)</b>\n"
-                f"📊 Prob. Modelo: <b>{op['prob_modelo_percent']}%</b> | Implícita: <b>{op['prob_implicita_percent']}%</b>\n"
-                f"📈 Odd Atual: <b>{op['odd_atual']}</b> | Odd Justa: <b>{op['odd_justa']}</b>"
-            )
-        elif op["type"] == "ODD_DROPPING":
-            linhas.append(
-                f"📉 <b>MOVIMENTO DE ODD</b>\n"
-                f"⚠️ {op['alerta']} ({op['odd_inicial']} ➡️ {op['odd_atual']})"
-            )
-        linhas.append("━━━━━━━━━━━━━━━━━━")
 
-    linhas.append(f"🧠 <b>Análise do Modelo:</b>\n{analise_gemini}")
+    linhas.append(
+        "⚠️ <b>GESTÃO DE BANCA:</b> Aposte com responsabilidade usando no máximo 1% a 2% por entrada.\n\n"[cite: 1, 2]
+        "JOGUE COMIGO E GANHE GIROS GRÁTIS NA SUPERBET!\n"[cite: 1]
+        "https://superbet.onelink.me/Hqv6/03r54ds3"[cite: 1]
+    )
     return "\n".join(linhas)
 
-def executar_pipeline_v7():
-    """Pipeline principal acionada pelo servidor."""
-    # Exemplo de payload processado vindo da data_engine e odds_engine
-    jogo_mock = {
-        "home_name": "Flamengo", "away_name": "Palmeiras",
-        "home_goals": 0, "away_goals": 0, "elapsed": 35,
-        "home_sot": 5, "away_sot": 1,
-        "home_possession": 62, "away_possession": 38
-    }
+def enviar_telegram(texto: str):
+    if not TELEGRAM_TOKEN or not CHAT_ID:[cite: 1]
+        print("Tokens do Telegram não configurados.")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"[cite: 1]
+    payload = {"chat_id": CHAT_ID, "text": texto, "parse_mode": "HTML"}[cite: 1, 2]
+    requests.post(url, json=payload, timeout=15)[cite: 1]
 
-    # 1. Checagem de Surebet entre 3 casas
-    odd_home_casaA = 2.20
-    odd_draw_casaB = 3.60
-    odd_away_casaC = 4.10
-    
-    surebet = calcular_surebet_1x2(odd_home_casaA, odd_draw_casaB, odd_away_casaC)
+if __name__ == "__main__":
+    # Exemplo de entrada de dados pré-jogo das 10h[cite: 1]
+    jogos_exemplo = [
+        {
+            "home_team": "Flamengo", "away_team": "Palmeiras", "league": "Brasileirão",[cite: 1]
+            "start_time_iso": datetime.now(BRT).replace(hour=16, minute=0).isoformat(),
+            "odds_superbet": {"Home": 2.25, "Draw": 3.30, "Away": 3.40},[cite: 1]
+            "odds_sharp": {"Home": 2.10, "Draw": 3.30, "Away": 3.60}
+        }
+    ]
 
-    # 2. Checagem de Value Bet (Poisson calculou 54% para vitória do mandante)[cite: 1]
-    prob_modelo_home = 0.54
-    value_bet = calcular_value_bet(prob_modelo_home, odd_home_casaA)
-
-    # 3. Checagem de Movimento de Odds (A odd do Flamengo caiu de 2.40 para 2.20)
-    movimento = analisar_movimento_odd(2.40, 2.20)
-
-    oportunidades = [op for op in [surebet, value_bet, movimento] if op is not None]
-
-    if oportunidades:
-        analise_gemini = consultar_gemini_interpretacao(jogo_mock, oportunidades)
-        mensagem = formatar_alerta_v7(jogo_mock, oportunidades, analise_gemini)
-        enviar_telegram(mensagem)[cite: 4]
-
-@app.get("/rodar-robo")
-@app.post("/rodar-robo")
-def rodar_robo_endpoint(background_tasks: BackgroundTasks):[cite: 4]
-    background_tasks.add_task(executar_pipeline_v7)[cite: 4]
-    return {
-        "status": "sucesso",
-        "mensagem": "Pipeline quantitativa V7 iniciada em segundo plano.",
-        "timestamp": datetime.now().isoformat()
-    }[cite: 4]
+    ops = analisar_oportunidades_pre_jogo(jogos_exemplo)
+    relatorio = formatar_relatorio_10h(ops)
+    enviar_telegram(relatorio)[cite: 1]
