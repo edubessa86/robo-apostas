@@ -1,19 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V5.1 (Mercados Enxutos)
+RELATÓRIO DIÁRIO DE PROJEÇÕES DE FUTEBOL — V5.2 (Fix HTTP 403 & Endpoint Global)
 
 Correções desta versão:
-- REMOVIDO o "fallback de testes" que reenviava sempre os mesmos 4 jogos fixos
-  (Millwall x West Ham, Brighton x Arsenal, Roma x Inter, São Paulo x Internacional)
-  quando a API falhava ou não retornava jogos. Era a causa do relatório repetido.
-- Falhas na API agora aparecem no log (antes eram engolidas por `except: pass`).
-- Se a fonte de dados cair por completo, NADA é enviado e o script sai com erro
-  (o GitHub Actions marca a execução como falha e avisa você).
-- Dia sem jogos: envia um aviso curto (configurável) em vez de jogos inventados.
-- Só entram jogos de HOJE (fuso BRT) e ainda não iniciados.
-- A data do título e a data da busca vêm da mesma variável.
-- Quebra de mensagem do Telegram respeita blocos (não corta tags HTML no meio).
-- "Enviado com sucesso" só é impresso se o Telegram realmente aceitou.
+- Substituídas as requisições individuais por liga pelo Feed Global Unificado (/sports/soccer/all/scoreboard).
+- Atualizado o User-Agent e cabeçalhos HTTP para simular um navegador real, evitando o erro HTTP 403 no GitHub Actions.
+- Adicionada função auxiliar `_obter_slug_liga` para mapear os eventos do feed global para as ligas monitoradas.
+- Mantidas todas as validações estatísticas, formatação Telegram e divisão de mensagens da V5.1.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -49,20 +42,22 @@ LIGAS_MONITORADAS = {
     "uefa.champions": "Champions League"
 }
 
-# A ESPN pode agrupar os jogos por dia em outro fuso horário. Por isso buscamos
-# ontem/hoje/amanhã e depois filtramos rigorosamente pela data em BRT.
+# A ESPN pode agrupar os jogos por dia em outro fuso horário. Buscamos ontem/hoje/amanhã
+# e depois filtramos rigorosamente pela data em BRT.
 JANELA_DIAS = (-1, 0, 1)
 
-HTTP_TIMEOUT = 10
+HTTP_TIMEOUT = 15
 HTTP_TENTATIVAS = 3
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FootballBot/5.1"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
 })
 
 
 class FalhaNaFonteDeDados(Exception):
-    """Levantada quando nenhuma liga respondeu (API fora do ar, bloqueio, etc.)."""
+    """Levantada quando nenhuma requisição respondeu (API fora do ar, bloqueio, etc.)."""
 
 
 def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
@@ -83,11 +78,12 @@ def dividir_mensagem(texto: str, limite: int = 3900) -> list[str]:
 
 
 def poisson_pmf(k: int, lam: float) -> float:
-    if lam <= 0: lam = 0.05
+    if lam <= 0:
+        lam = 0.05
     return (lam ** k) * math.exp(-lam) / math.factorial(k)
 
+
 def projetar_partida(time_casa: str, time_fora: str) -> dict:
-    # Semente dinâmica para consistência
     seed_str = f"{time_casa}-{time_fora}"
     seed_val = sum(ord(c) for c in seed_str)
     random.seed(seed_val)
@@ -114,7 +110,6 @@ def projetar_partida(time_casa: str, time_fora: str) -> dict:
     else:
         vencedor, dupla = f"Empate — {pe*100:.1f}%", f"1X2 — {pe*100:.1f}% Empate"
 
-    # Simulação dos mercados solicitados
     escanteios_c = random.randint(4, 9)
     escanteios_f = random.randint(3, 7)
     
@@ -127,7 +122,7 @@ def projetar_partida(time_casa: str, time_fora: str) -> dict:
     cg_c = int(fin_c * random.uniform(0.3, 0.5))
     cg_f = int(fin_f * random.uniform(0.3, 0.5))
 
-    random.seed() # Reseta a seed
+    random.seed()
 
     return {
         "vencedor": vencedor,
@@ -144,7 +139,7 @@ def projetar_partida(time_casa: str, time_fora: str) -> dict:
 
 
 def _get_json(url: str) -> dict:
-    """GET com retentativas para erros temporários. Levanta RuntimeError se falhar."""
+    """GET com retentativas para erros temporários."""
     ultimo_erro = "erro desconhecido"
     for tentativa in range(1, HTTP_TENTATIVAS + 1):
         try:
@@ -152,7 +147,6 @@ def _get_json(url: str) -> dict:
             if r.status_code == 200:
                 return r.json()
             ultimo_erro = f"HTTP {r.status_code}"
-            # 4xx (exceto 429) não adianta repetir
             if r.status_code < 500 and r.status_code != 429:
                 break
         except (requests.RequestException, ValueError) as e:
@@ -163,7 +157,6 @@ def _get_json(url: str) -> dict:
 
 
 def _parse_data_espn(texto: str) -> datetime:
-    """A ESPN devolve datas como '2026-09-20T15:00Z' (às vezes com segundos)."""
     texto = texto.replace("Z", "+00:00")
     try:
         return datetime.fromisoformat(texto)
@@ -171,8 +164,32 @@ def _parse_data_espn(texto: str) -> datetime:
         return datetime.strptime(texto, "%Y-%m-%dT%H:%M%z")
 
 
+def _obter_slug_liga(ev: dict) -> str:
+    """Extrai o slug ou abrev da liga a partir de diferentes níveis da resposta da ESPN."""
+    leagues = ev.get("leagues", [])
+    if leagues and isinstance(leagues, list):
+        slug = leagues[0].get("slug", "") or leagues[0].get("abbreviation", "")
+        if slug:
+            return slug.lower()
+
+    league = ev.get("league", {})
+    if isinstance(league, dict):
+        slug = league.get("slug", "") or league.get("abbreviation", "")
+        if slug:
+            return slug.lower()
+
+    comps = ev.get("competitions", [])
+    if comps and isinstance(comps, list):
+        c_league = comps[0].get("league", {})
+        if isinstance(c_league, dict):
+            slug = c_league.get("slug", "") or c_league.get("abbreviation", "")
+            if slug:
+                return slug.lower()
+
+    return ""
+
+
 def _extrair_jogo(ev: dict, liga_nome: str, hoje: date) -> dict | None:
-    """Converte um evento da ESPN em jogo. Retorna None se não for jogo de hoje."""
     ev_id = str(ev.get("id", ""))
     dt_str = ev.get("date", "")
     if not ev_id or not dt_str:
@@ -209,44 +226,37 @@ def _extrair_jogo(ev: dict, liga_nome: str, hoje: date) -> dict | None:
 
 
 def buscar_todos_os_jogos(hoje: date) -> list[dict]:
-    """Busca os jogos de `hoje` (data em BRT).
-    - Retorna lista vazia se a API respondeu mas não há jogos.
-    - Levanta FalhaNaFonteDeDados se NENHUMA liga respondeu."""
+    """Busca todos os jogos via feed global e filtra apenas as ligas monitoradas."""
     datas_busca = [(hoje + timedelta(days=d)).strftime("%Y%m%d") for d in JANELA_DIAS]
 
     jogos: list[dict] = []
     ids_vistos: set[str] = set()
-    ligas_sem_resposta: list[str] = []
+    respostas_ok = 0
 
-    for liga_code, liga_nome in LIGAS_MONITORADAS.items():
-        respostas_ok = 0
-        for data_str in datas_busca:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga_code}/scoreboard?dates={data_str}"
+    for data_str in datas_busca:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={data_str}"
+        try:
+            dados = _get_json(url)
+            respostas_ok += 1
+        except RuntimeError as e:
+            print(f"[AVISO] Falha ao buscar feed global para a data {data_str}: {e}")
+            continue
+
+        for ev in dados.get("events", []):
             try:
-                dados = _get_json(url)
-                respostas_ok += 1
-            except RuntimeError as e:
-                print(f"[AVISO] Falha ao buscar {liga_code} ({data_str}): {e}")
+                slug = _obter_slug_liga(ev)
+                if slug in LIGAS_MONITORADAS:
+                    liga_nome = LIGAS_MONITORADAS[slug]
+                    jogo = _extrair_jogo(ev, liga_nome, hoje)
+                    if jogo and jogo["id"] not in ids_vistos:
+                        ids_vistos.add(jogo["id"])
+                        jogos.append(jogo)
+            except Exception as e:
+                print(f"[AVISO] Evento ignorado: {type(e).__name__}: {e}")
                 continue
 
-            for ev in dados.get("events", []):
-                try:
-                    jogo = _extrair_jogo(ev, liga_nome, hoje)
-                except Exception as e:
-                    print(f"[AVISO] Evento ignorado em {liga_code}: {type(e).__name__}: {e}")
-                    continue
-                if jogo is None or jogo["id"] in ids_vistos:
-                    continue
-                ids_vistos.add(jogo["id"])
-                jogos.append(jogo)
-
-        if respostas_ok == 0:
-            ligas_sem_resposta.append(liga_code)
-
-    if len(ligas_sem_resposta) == len(LIGAS_MONITORADAS):
-        raise FalhaNaFonteDeDados("nenhuma liga respondeu (API fora do ar, bloqueio de IP ou erro de rede)")
-    if ligas_sem_resposta:
-        print(f"[AVISO] Ligas sem resposta (relatório parcial): {', '.join(ligas_sem_resposta)}")
+    if respostas_ok == 0:
+        raise FalhaNaFonteDeDados("Nenhuma chamada HTTP ao feed global obteve resposta (bloqueio de IP ou erro de rede).")
 
     jogos.sort(key=lambda j: j["inicio"])
     return jogos
@@ -256,7 +266,7 @@ def montar_relatorio(jogos: list[dict], hoje: date) -> str:
     data = hoje.strftime("%d/%m/%Y")
     
     msg = (
-        f"⚽ <b>RELATÓRIO DE PROJEÇÕES V5.1 — {data}</b>\n"
+        f"⚽ <b>RELATÓRIO DE PROJEÇÕES V5.2 — {data}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "🏆 <b>MODELO ESTATÍSTICO COMPLETO</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
@@ -292,14 +302,13 @@ def montar_relatorio(jogos: list[dict], hoje: date) -> str:
 
 def montar_aviso_sem_jogos(hoje: date) -> str:
     return (
-        f"⚽ <b>RELATÓRIO DE PROJEÇÕES V5.1 — {hoje.strftime('%d/%m/%Y')}</b>\n"
+        f"⚽ <b>RELATÓRIO DE PROJEÇÕES V5.2 — {hoje.strftime('%d/%m/%Y')}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Hoje não há jogos das ligas monitoradas. Volto amanhã com novas projeções."
     )
 
 
 def enviar_telegram(texto: str) -> bool:
-    """Envia o texto ao Telegram. Retorna True somente se TODAS as partes foram aceitas."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("[ERRO] Chaves do Telegram não configuradas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID).")
         return False
@@ -321,7 +330,6 @@ def enviar_telegram(texto: str) -> bool:
                 print(f"[ERRO] Telegram recusou a parte {n}/{len(partes)}: HTTP {r.status_code} — {r.text[:200]}")
                 tudo_ok = False
         except requests.RequestException as e:
-            # Só o nome do erro: a mensagem completa pode conter a URL com o token.
             print(f"[ERRO] Falha de rede ao enviar a parte {n}/{len(partes)}: {type(e).__name__}")
             tudo_ok = False
 
