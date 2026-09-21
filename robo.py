@@ -73,7 +73,6 @@ def run_pipeline() -> int:
             
         if not fixtures:
             print("[INFO] Nenhuma partida ou cotação válida retornada para o dia de hoje.")
-            # Se não houver jogos ou odds no dia, finaliza com código 0 sem disparar sinal
             return 0
         db_path = "quant_bot_v7.db"
 
@@ -143,4 +142,4 @@ def run_pipeline() -> int:
         return 1
 
 if __name__ == "__main__":
-    sys.exit(run_pipeline())=
+    sys.exit(run_pipeline())
