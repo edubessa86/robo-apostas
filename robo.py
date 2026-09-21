@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.5
-- IA Gemini 3.6 Flash com Google Search Grounding
-- Estrutura completa de Emojis e Análises por Partida
-- Link de Aposta na Sportingbet para cada jogo
-- Fallback emergencial rico em detalhes e com emojis
-- Link de Cadastro e Recompensa ao final das mensagens
+ROBÔ DE PROJEÇÕES E APOSTAS ESPORTIVAS — V5.6
+- Correção de sintaxe HTML para o Telegram (substituição de `<7/10` por `Abaixo de 7/10`)
+- Tratamento para cota esgotada da API Gemini (429) com envio do relatório de fallback
+- Layout completo com Emojis, Links para a Sportingbet e Cadastro com Recompensa
 """
 
 from datetime import datetime
-import html
 import os
 import urllib.parse
 import requests
@@ -164,13 +161,12 @@ def buscar_jogos_espn():
 
 
 def gerar_link_sportingbet(nome_confronto: str) -> str:
-    """Gera link de aposta direto para a Sportingbet."""
+    """Gera link de busca direto para a partida na Sportingbet."""
     termo = urllib.parse.quote_plus(f"sportingbet apostas {nome_confronto}")
     return f"https://www.google.com/search?q={termo}"
 
 
 def montar_prompt(data_hoje: str, dados_jogos_str: str) -> str:
-    """Monta a instrução para o Gemini gerar o relatório com layout rico e emojis."""
     return f"""
 Você é um analista profissional de apostas esportivas.
 Com base nos dados fornecidos abaixo para {data_hoje} (Horário de Brasília, UTC-3), gere um relatório de apostas detalhado e completo para o Telegram.
@@ -181,7 +177,7 @@ DADOS DOS JOGOS DISPONÍVEIS:
 REGRAS ESTRITAS DE FORMATO:
 1. Analise cada jogo trazendo palpite de Vencedor/Mercado, Odd estimada, Nível de Confiança, Escanteios, Cartões e Placar Provável.
 2. Para CADA jogo, você DEVE colocar o link da Sportingbet no formato: `<a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>`.
-3. Siga EXATAMENTE a estrutura visual HTML abaixo, com TODOS os emojis em cada bloco de jogo.
+3. Siga EXATAMENTE a estrutura visual HTML abaixo, sem alterar as tags.
 
 ESTRUTURA OBRIGATÓRIA DA MENSAGEM (HTML):
 
@@ -207,14 +203,14 @@ ESTRUTURA OBRIGATÓRIA DA MENSAGEM (HTML):
 🔗 <a href="https://www.sportingbet.br/">Apostar na Sportingbet</a>
 ━━━━━━━━━━━━━━━━━━
 
-(Repita a estrutura acima utilizando 🥈 ⚽️, 🥉 ⚽️ e ⚽️ para os demais jogos do dia, personalizando os dados de cada confronto)
+(Repita a estrutura acima utilizando 🥈 ⚽️, 🥉 ⚽️ e ⚽️ para os demais jogos do dia)
 
 📊 <b>GESTÃO DE BANCA</b>
 ━━━━━━━━━━━━━━━━━━
 🟢 9/10 → stake principal
 🟢 8–8.5/10 → stake moderada
 🟡 7–7.5/10 → stake reduzida
-🔴 <7/10 → evitar
+🔴 Abaixo de 7/10 → evitar
 ⚠️ Odds são referências e mudam. Aposte com responsabilidade.
 
 🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>
@@ -224,7 +220,7 @@ Ganhe bônus de boas-vindas e giros grátis se cadastrando no link oficial abaix
 
 
 def formatar_fallback_emergencial(jogos, origem, data_hoje):
-    """Fallback rico em detalhes e emojis quando a IA não estiver disponível."""
+    """Fallback emergencial rico em detalhes e sem erros de tags HTML."""
     medalhas = ["🥇", "🥈", "🥉", "⚽️", "⚽️"]
     linhas = [
         f"🔥 <b>APOSTAS ESPORTIVAS — {data_hoje}</b>\n",
@@ -269,7 +265,7 @@ def formatar_fallback_emergencial(jogos, origem, data_hoje):
         "🟢 9/10 → stake principal",
         "🟢 8–8.5/10 → stake moderada",
         "🟡 7–7.5/10 → stake reduzida",
-        "🔴 <7/10 → evitar",
+        "🔴 Abaixo de 7/10 → evitar",
         "⚠️ Odds são referências e mudam. Aposte com responsabilidade.\n",
         "🎁 <b>CADASTRE-SE E RESGATE SUA RECOMPENSA!</b>",
         "Ganhe bônus de boas-vindas e giros grátis se cadastrando no link abaixo:",
@@ -298,7 +294,7 @@ def executar_robo():
             fonte_usada = "Google Search Grounding"
             dados_contexto = "Pesquise na web os jogos de futebol mais relevantes agendados para hoje."
 
-    # 2. Geração do relatório com a IA
+    # 2. Geração do relatório via IA
     prompt = montar_prompt(data_hoje, dados_contexto)
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool])
@@ -314,7 +310,7 @@ def executar_robo():
         )
         relatorio = response.text
     except ClientError as e:
-        print(f"[ERRO] Chamada API Gemini: {e}")
+        print(f"[ERRO] Cota ou chamada API Gemini: {e}")
     except Exception as e:
         print(f"[ERRO] Exceção geral na IA: {e}")
 
